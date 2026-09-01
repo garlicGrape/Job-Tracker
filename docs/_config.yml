@@ -1,0 +1,7 @@
+# GitHub Pages still runs Jekyll against this folder.
+# Serve the Vite SPA as-is — no theme layout wrapping index.html.
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: null
