@@ -58,8 +58,10 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 
 6. `npm run dev` — sign up, add a listing, refresh, sign in again.
 
-For GitHub Pages, add the same two names as repository **Actions secrets** so
-`npm run build:pages` can inline them. Then commit the new `docs/` build.
+For GitHub Pages, put those values in `.env`, run `npm run build:pages`, and
+commit `docs/`. The anon key is meant to ship in the static build; RLS still
+blocks other accounts. Do not inject keys only as Actions secrets — CI rebuilds
+`docs/` without secrets so it can check the committed folder.
 
 ## Stack
 

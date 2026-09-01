@@ -30,8 +30,10 @@ export, not the database. It is not a Google Apps Script project.
 - `npm test` is the gate. **Do not open a PR on red.** Tests must not need a
   live Supabase project (use a fake client).
 - GitHub Pages publishes `docs/` from `main`. After a UI change run
-  `npm run build:pages` and commit `docs/`. Pass `VITE_SUPABASE_URL` and
-  `VITE_SUPABASE_ANON_KEY` at build time (repo Actions secrets).
+  `npm run build:pages` and commit `docs/`. If the app should talk to Supabase
+  on Pages, put `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env`
+  before that build so they are inlined into `docs/`. CI does not pass secrets
+  into the Pages check.
 
 ## Commands
 
