@@ -542,7 +542,7 @@ export default function App() {
                 <p className="section-lede">
                   {applications.length === 0
                     ? 'Nothing here yet.'
-                    : `${applications.length} saved · newest stays in the list`}
+                    : `${applications.length} saved · edit or delete any row`}
                 </p>
               </div>
               <div className="toolbar">
