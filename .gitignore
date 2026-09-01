@@ -6,6 +6,8 @@ coverage/
 .env
 .env.local
 .data/
+public/config.json
+docs/config.json
 
 # Editor
 .vscode/

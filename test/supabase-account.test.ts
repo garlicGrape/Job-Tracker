@@ -5,6 +5,12 @@ import {
   toRow,
   type ApplicationRow
 } from '../src/lib/supabase-account';
+import {
+  loadSupabaseConfig,
+  parsePublishableKey,
+  parsePublicConfig,
+  parseSupabaseUrl
+} from '../src/lib/supabase-config';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 type FakeUser = { id: string; email: string; password: string };
@@ -206,3 +212,46 @@ describe('Supabase account API', () => {
     await expect(api.signIn('me@example.com', 'wrong-pass')).rejects.toThrow(/invalid login/i);
   });
 });
+
+describe('publishable key config', () => {
+  it('accepts a publishable key and https project URL', () => {
+    const config = parsePublicConfig({
+      url: 'https://abcd.supabase.co/',
+      publishableKey: 'sb_publishable_testkey'
+    });
+    expect(config.url).toBe('https://abcd.supabase.co');
+    expect(config.publishableKey).toBe('sb_publishable_testkey');
+    expect(parseSupabaseUrl('https://abcd.supabase.co')).toBe('https://abcd.supabase.co');
+    expect(parsePublishableKey('sb_publishable_testkey')).toBe('sb_publishable_testkey');
+  });
+
+  it('rejects secret keys and legacy JWT anon keys', () => {
+    expect(() => parsePublishableKey('sb_secret_nope')).toThrow(/secret key/i);
+    expect(() => parsePublishableKey('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig')).toThrow(
+      /legacy jwt/i
+    );
+    expect(() => parsePublishableKey('not-a-key')).toThrow(/sb_publishable_/);
+  });
+
+  it('loads runtime config.json and ignores missing files', async () => {
+    const missing = await loadSupabaseConfig({
+      fetch: async () => new Response('Not found', { status: 404 }),
+      configUrl: 'https://example.test/config.json'
+    });
+    expect(missing).toBeNull();
+
+    const loaded = await loadSupabaseConfig({
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            url: 'https://abcd.supabase.co',
+            publishableKey: 'sb_publishable_fromfile'
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        ),
+      configUrl: 'https://example.test/config.json'
+    });
+    expect(loaded?.publishableKey).toBe('sb_publishable_fromfile');
+  });
+});
+

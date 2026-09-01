@@ -17,9 +17,26 @@ not a Node server you have to keep alive.
 | Supabase Auth | Email / password accounts |
 | `public.applications` | Your rows (`user_id`, company, title, `date_applied` as `YYYY-MM-DD` text, offer flag, posting URL) |
 | Row-level security | `auth.uid() = user_id` on select/insert/update/delete. Account B cannot read account A. |
-| Anon key | Safe to ship in the static app. RLS is what keeps the table private. Never put the **service role** key in this repo. |
+| Publishable key | `sb_publishable_...` — low privilege, same as the old anon JWT. The browser needs *some* public identifier. **Secret** keys (`sb_secret_...`, `service_role`) never go in the app or git. |
 
 GitHub Pages and Lovable only serve the UI. They never see the table.
+
+### Why a key in the browser is not a “database password”
+
+Anyone can open DevTools and read whatever the frontend uses. That is true of
+every SPA. Supabase’s model is:
+
+- **Publishable key** — only says “this request is for *this* project.” It does
+  not bypass RLS. Rotatable; not a long-lived JWT. Safe to *use* in the client.
+- **Your login JWT** — issued after email/password sign-in. Policies use
+  `auth.uid()`.
+- **Secret key** — bypasses RLS. Treat like a root password. Never in git,
+  never in `docs/`, never in Lovable.
+
+Do **not** commit keys to GitHub (not even the publishable one). Git history
+keeps them forever, and you might paste a secret key by mistake. This repo
+gitignores `.env`, `public/config.json`, and `docs/config.json`. Production
+builds do **not** inline keys; the app loads `config.json` at runtime.
 
 ## How it works
 
@@ -48,20 +65,27 @@ still there.
 2. SQL editor: paste and run [`supabase/schema.sql`](supabase/schema.sql).
 3. Authentication → Providers → Email: turn **off** “Confirm email” if you want
    to sign in immediately on a personal app.
-4. Project Settings → API: copy **Project URL** and **anon public** key.
-5. Copy `.env.example` to `.env` and fill those two values:
+4. **Settings → API Keys** (not the legacy JWT tab). If you only see *anon* /
+   *service_role*, click **Create new API keys**. Copy the **Project URL** and
+   the **publishable** key (`sb_publishable_...`). Never copy a secret key.
+5. Local connect (pick one; neither file is committed):
 
-```
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key
-```
+   - Copy `public/config.example.json` to `public/config.json` and fill it in,
+     **or**
+   - Copy `.env.example` to `.env` with `VITE_SUPABASE_PUBLISHABLE_KEY` (dev
+     server only; production builds ignore these so keys are not baked into
+     `docs/`).
 
-6. `npm run dev` — sign up, add a listing, refresh, sign in again.
+6. `npm run dev` — you should see Sign in / Create account.
 
-For GitHub Pages, put those values in `.env`, run `npm run build:pages`, and
-commit `docs/`. The anon key is meant to ship in the static build; RLS still
-blocks other accounts. Do not inject keys only as Actions secrets — CI rebuilds
-`docs/` without secrets so it can check the committed folder.
+### GitHub Pages without putting keys in git
+
+1. Repo **Settings → Secrets and variables → Actions**: add `SUPABASE_URL` and
+   `SUPABASE_PUBLISHABLE_KEY`.
+2. **Settings → Pages**: source **GitHub Actions**.
+3. The `pages` workflow builds the app and writes `config.json` at deploy time.
+
+The committed `docs/` folder stays key-free so CI can check it.
 
 ## Stack
 
@@ -95,8 +119,8 @@ npm run dev      # Vite at http://localhost:5173
 npm run build    # static files in dist/
 ```
 
-Without `.env`, the UI asks you to connect a Supabase project. Tests do not
-need a live project; they use a fake client.
+Without `public/config.json` or a dev `.env`, the UI asks you to connect a
+Supabase project. Tests do not need a live project; they use a fake client.
 
 ## Host it
 
@@ -104,17 +128,20 @@ need a live project; they use a fake client.
 
 Live site: **https://garlicgrape.github.io/Job-Tracker/**
 
-Pages source is **Deploy from a branch → `main` → `/docs`**. After a UI change
-(and after setting Supabase env for the build), run `npm run build:pages` and
-commit `docs/`.
+The committed `docs/` folder is a key-free static build. To actually sign in on
+Pages, use the `pages` GitHub Action with `SUPABASE_URL` and
+`SUPABASE_PUBLISHABLE_KEY` secrets, and set Pages source to **GitHub Actions**.
+
+After a UI change, still run `npm run build:pages` and commit `docs/` so CI’s
+key-free check stays green.
 
 ### Lovable as the frontend
 
 1. Import the GitHub repo in [Lovable](https://lovable.dev).
 2. Restyle `src/App.tsx` / `src/index.css` (`.lock-screen`, `.auth-tab`,
    `.privacy-note`). Leave `src/lib/` and `supabase/schema.sql` alone.
-3. Point Lovable at the same `VITE_SUPABASE_*` values. Do not let it recreate
-   the table without RLS, and do not paste a **service role** key into the app.
+3. Give Lovable a **publishable** key via its env UI, never a secret or
+   `service_role` key. Do not let it recreate the table without RLS.
 
 ## Moving off the old Google Sheet
 
