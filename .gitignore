@@ -1,20 +1,10 @@
 node_modules/
-dist/
-build/
+coverage/
 *.log
-*.tsbuildinfo
 .DS_Store
 
-# Local SQLite database + data
-server/data/*.db
-server/data/*.db-journal
-server/data/*.db-wal
-server/data/*.db-shm
-
-# Env files
-.env
-.env.local
-*.local
+# clasp OAuth tokens — NEVER commit these
+.clasprc.json
 
 # Editor
 .vscode/

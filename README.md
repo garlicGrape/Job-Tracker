@@ -1,72 +1,72 @@
 # Job Tracker
 
-A small full-stack app for tracking job applications from **Wishlist** all the way
-to **Offer**. Built as a monorepo with an Express + SQLite API and a React + Vite UI.
+A private [Google Apps Script](https://developers.google.com/apps-script) web app that
+records job applications to a bound Google Sheet. Four fields — **Company**, **Title**,
+**Date Applied**, **Received Offer** — a form, and a table of past entries.
 
-![Stack](https://img.shields.io/badge/stack-React%20%2B%20Express%20%2B%20SQLite-4f46e5)
+Nothing to host, no API keys, no backend to keep alive. The app runs inside Google and
+is already authorized on your sheet; the repo is the source of truth and `clasp push`
+mirrors it into the editor.
 
-## Features
+## Stack
 
-- Create, edit, and delete job applications
-- Track status (Wishlist → Applied → Interviewing → Offer / Rejected)
-- Filter by status and see live stats per stage
-- Persistent storage with SQLite (no external database required)
+| Layer   | Choice                                   |
+| ------- | ---------------------------------------- |
+| UI      | Apps Script `HtmlService` + vanilla JS   |
+| Server  | Apps Script (V8 runtime)                 |
+| Storage | The bound Google Sheet                   |
+| Auth    | Google account, "Only myself"            |
+| Tests   | [Vitest](https://vitest.dev) on Node     |
+| Deploy  | [`clasp`](https://github.com/google/clasp) |
 
-## Project structure
+## Layout
 
 ```
-.
-├── client/           # React + Vite + TypeScript + Tailwind CSS frontend
-├── server/           # Express + TypeScript + better-sqlite3 API
-├── package.json      # npm workspaces + dev scripts
-└── .cursor/          # Cloud Agent environment configuration
+src/Code.gs         # Apps Script backend (validation, escaping, locking)
+src/Index.html      # UI served by HtmlService
+src/appsscript.json # Apps Script manifest
+test/harness.js     # reads Code.gs as text, evals with fake Google globals
+test/*.test.js      # offline Vitest suites
+.cursor/environment.json  # Cloud Agent config ({ "install": "npm ci" })
+AGENTS.md           # constraints for humans and agents
+.clasp.json         # script ID (safe to commit)
 ```
 
-## Requirements
+## Why it's testable offline
 
-- Node.js >= 20 (developed on Node 22)
-- npm >= 10
+Apps Script's V8 runtime shares one global scope across `.gs` files, so `Code.gs` is
+plain JavaScript. The Node harness reads it as text, evaluates it with fake
+`SpreadsheetApp` / `LockService` globals, and calls the functions directly. That turns an
+otherwise-untestable project into one you (and cloud agents) can iterate on unattended.
 
-## Getting started
+The suite verifies: validation rules, formula-injection escaping, date handling, row
+mapping, lock acquisition/release, and header creation. It **cannot** verify the deployed
+web app renders or that Google authorization succeeded — deploy and click through that
+part by hand.
+
+## Develop
 
 ```bash
-# Install all workspace dependencies
-npm install
-
-# Run the API (http://localhost:3001) and the web app (http://localhost:5173)
-npm run dev
+npm ci      # install dev dependencies
+npm test    # run the Vitest suite (the gate)
 ```
 
-The Vite dev server proxies `/api` requests to the API, so open
-<http://localhost:5173> and start adding applications. On first run the API seeds
-a few example rows so the UI isn't empty.
+## Deploy (manual)
 
-## Useful commands
+1. Create a Google Sheet and rename the first tab to `Applications` (leave row 1 empty —
+   the code writes its own header on first run).
+2. **Extensions → Apps Script**, then copy the script ID from **Project Settings** into
+   `.clasp.json` (replace `REPLACE_WITH_YOUR_SCRIPT_ID`).
+3. Authorize clasp locally: `npx clasp login`.
+4. Push and deploy:
+   ```bash
+   npx clasp push
+   ```
+   Then in the Apps Script editor: **Manage deployments → edit (pencil) →
+   Version: New version**. Choosing "New deployment" instead gives a fresh URL and leaves
+   the old one serving stale code.
+5. Open the web app and check by hand: submit a row, watch the sheet, toggle the offer
+   checkbox, reload.
 
-| Command             | Description                                        |
-| ------------------- | -------------------------------------------------- |
-| `npm run dev`       | Run the API and web app together (via concurrently)|
-| `npm run dev:server`| Run only the API in watch mode                     |
-| `npm run dev:client`| Run only the web app                               |
-| `npm run build`     | Type-check and build both packages                 |
-| `npm test`          | Run the API integration tests                      |
-| `npm run typecheck` | Type-check both packages                           |
-| `npm run lint`      | Type-check both packages (lint gate)               |
-
-## API
-
-Base URL: `/api`
-
-| Method   | Path            | Description                         |
-| -------- | --------------- | ----------------------------------- |
-| `GET`    | `/health`       | Health check                        |
-| `GET`    | `/statuses`     | List of valid statuses              |
-| `GET`    | `/stats`        | Totals grouped by status            |
-| `GET`    | `/jobs`         | List jobs (optional `?status=`)     |
-| `GET`    | `/jobs/:id`     | Get a single job                    |
-| `POST`   | `/jobs`         | Create a job                        |
-| `PUT`    | `/jobs/:id`     | Update a job                        |
-| `DELETE` | `/jobs/:id`     | Delete a job                        |
-
-The SQLite database is stored at `server/data/jobs.db` (git-ignored). Override the
-location with the `DATABASE_FILE` environment variable.
+> `clasp push` overwrites the online editor — the repo always wins. `.clasprc.json` holds
+> your OAuth tokens and is gitignored; never commit it.
