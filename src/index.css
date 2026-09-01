@@ -34,6 +34,16 @@ header.hero {
   margin-bottom: 24px;
 }
 
+header.hero > div:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+
+.lock-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .logo {
   width: 40px;
   height: 40px;
@@ -97,7 +107,8 @@ label {
 }
 
 input[type="text"],
-input[type="date"] {
+input[type="date"],
+input[type="password"] {
   border: 1px solid var(--slate-200);
   border-radius: 9px;
   padding: 9px 11px;
@@ -108,7 +119,8 @@ input[type="date"] {
 }
 
 input[type="text"]:focus,
-input[type="date"]:focus {
+input[type="date"]:focus,
+input[type="password"]:focus {
   border-color: var(--indigo);
   box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
@@ -304,6 +316,31 @@ td:last-child {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   border: 0;
+}
+
+.privacy-note {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--slate-500);
+}
+
+.lock-screen h2 {
+  margin-bottom: 8px;
+}
+
+.lock-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.lock-form .actions {
+  grid-column: 1 / -1;
+}
+
+.reset-vault {
+  margin-top: 16px;
 }
 
 @media (max-width: 600px) {

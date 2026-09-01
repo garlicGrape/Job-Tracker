@@ -6,43 +6,50 @@ Five fields — **Company**, **Title**, **Date Applied**, **Received Offer**,
 as CSV.
 
 Nothing to host beyond a static site, no API keys, no Google Sheet, no backend
-to keep alive. Data lives in `localStorage` on the machine and browser you use;
-CSV is how you take a copy with you.
+to keep alive. The list is encrypted in `localStorage` with **your passphrase**
+on the machine and browser you use. The public website only serves the app;
+it never sees your applications. CSV is how you take a copy with you.
 
 ## How it works
 
 ```
 Browser
-  ├── React UI (src/App.tsx)
+  ├── React UI (src/App.tsx)                  ← lock screen + form (Lovable)
   ├── Domain logic (src/lib/applications.ts)  ← validation, dates, ids
-  ├── Store (src/lib/store.ts)                ← read/write localStorage
+  ├── Store (src/lib/store.ts)                ← read/write once unlocked
+  ├── Vault (src/lib/vault.ts)                ← passphrase encrypt / decrypt
   └── CSV (src/lib/csv.ts)                    ← export + import
 ```
 
-1. **Add** — the form validates company, title, and a real `YYYY-MM-DD` date,
-   then appends a record to `localStorage` under `job-tracker.applications`.
-   Posting URL is optional; if you paste a hostname without `https://`, the
-   app adds it.
-2. **List** — on load, the table is rendered from that same key.
-3. **Edit** — **Edit** on a row loads that application into the form. Save
+1. **Passphrase** — first visit you choose a passphrase (min 8 characters).
+   Later visits you unlock with it. It is kept in memory only, never written
+   to `localStorage` or sent to a server.
+2. **Add** — the form validates company, title, and a real `YYYY-MM-DD` date,
+   then appends a record. The whole list is re-encrypted into
+   `job-tracker.applications`. Posting URL is optional; if you paste a
+   hostname without `https://`, the app adds it.
+3. **List** — after unlock, the table is rendered from the decrypted list.
+4. **Edit** — **Edit** on a row loads that application into the form. Save
    writes over the same record; Cancel discards the draft.
-4. **Offer checkbox** — updates only that record’s `receivedOffer` flag.
-5. **Export CSV** — downloads `job-applications-YYYY-MM-DD.csv`. Values that
+5. **Offer checkbox** — updates only that record’s `receivedOffer` flag.
+6. **Lock** — clears the decrypted list from the page. Ciphertext stays.
+7. **Export CSV** — downloads `job-applications-YYYY-MM-DD.csv`. Values that
    look like spreadsheet formulas (`=`, `+`, `-`, `@`) are prefixed with `'`
    so Excel / Sheets will not execute them.
-6. **Import CSV** — appends rows from a CSV with the same headers (including
+8. **Import CSV** — appends rows from a CSV with the same headers (including
    a File → Download → CSV export of the old four-column Google Sheet).
 
-There is no server-side database. Clearing site data, switching browsers, or
-opening the app on another device starts from an empty list unless you import
-a CSV.
+There is no server-side database and no account. Clearing site data, switching
+browsers, or opening the app on another device starts from an empty vault
+unless you import a CSV. Forgetting the passphrase also means the list is
+gone — reset the device vault and import a backup.
 
 ## Stack
 
 | Layer     | Choice                                      |
 | --------- | ------------------------------------------- |
 | UI        | React 18 + Vite                             |
-| Storage   | `localStorage`                              |
+| Storage   | Encrypted `localStorage` (passphrase)       |
 | Export    | CSV download                                |
 | Tests     | [Vitest](https://vitest.dev) on Node        |
 | Deploy    | Any static host (GitHub Pages, Lovable, …)  |
@@ -54,7 +61,8 @@ src/App.tsx              # UI (the surface Lovable can restyle)
 src/main.tsx             # React entry
 src/index.css            # layout and colors
 src/lib/applications.ts  # validation, dates, formula escaping
-src/lib/store.ts         # localStorage persistence
+src/lib/store.ts         # unlocked-session persistence
+src/lib/vault.ts         # passphrase encryption (AES-GCM)
 src/lib/csv.ts           # CSV export / import
 src/lib/types.ts         # shared types
 test/*.test.ts           # offline Vitest suites
@@ -92,19 +100,21 @@ Connect the GitHub repo. Build command: `npm run build`. Publish directory:
 ### Lovable as the frontend
 
 [Lovable](https://lovable.dev) edits React + Vite repos. This app is already
-that shape:
+that shape. **Lovable restyles the UI; this repo owns storage and privacy.**
 
 1. Push to GitHub and **Import** the repo in Lovable (or open it with Lovable’s
    GitHub integration).
-2. Ask Lovable to restyle `src/App.tsx` / `src/index.css`. Leave `src/lib/`
-   alone — validation, storage, and CSV live there so a UI rewrite cannot
-   silently drop the rules the tests cover.
-3. Publish from Lovable. Preview and production are still static pages, so
-   `localStorage` and CSV export keep working.
+2. Ask Lovable to restyle `src/App.tsx` / `src/index.css` (including the lock
+   screen classes `.lock-screen`, `.lock-form`, `.privacy-note`). Leave
+   `src/lib/` alone — validation, the encrypted vault, and CSV live there so
+   a UI rewrite cannot silently drop the rules the tests cover.
+3. Publish from Lovable. Preview and production are still static pages. Each
+   visitor gets their own encrypted `localStorage`; Lovable cannot see it.
 
-Lovable does not replace `localStorage` with a cloud database by itself. If you
-later want the list to sync across devices, that is a separate backend (for
-example Supabase); this repo stays frontend-only on purpose.
+Do not ask Lovable to “add Supabase” or a cloud database for this app. A hosted
+database would put your applications on someone else’s servers. Encrypted
+`localStorage` plus CSV export is the private path. Sync across devices is a
+CSV export on one machine and import on the other.
 
 ## Moving off the old Google Sheet
 
@@ -119,6 +129,7 @@ injected `{ getItem, setItem }` storage. Tests pass a memory map, so the suite
 runs in Node with no window and no network.
 
 The suite verifies: validation rules, formula-injection escaping on CSV export,
-date handling, persistence, offer toggles, and CSV round-trip. It cannot verify
+date handling, persistence, offer toggles, CSV round-trip, and that the vault
+round-trips with a passphrase without storing plaintext. It cannot verify
 that a particular host served `dist/` correctly — open the deployed URL and
 click through that part by hand.
