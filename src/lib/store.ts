@@ -1,42 +1,10 @@
 import { STORAGE_KEY, type Application, type ApplicationInput } from './types';
 import { createApplication, isValidHttpUrl, toBoolean } from './applications';
-import { isVaultEnvelope } from './vault';
 
 export type KeyValueStorage = {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 };
-
-/**
- * In-memory KeyValueStorage used after the vault is unlocked, so store
- * helpers stay synchronous while localStorage holds only ciphertext.
- */
-export function createSessionStorage(apps: Application[] = []): KeyValueStorage {
-  let serialized = JSON.stringify(apps);
-  return {
-    getItem(key: string) {
-      return key === STORAGE_KEY ? serialized : null;
-    },
-    setItem(key: string, value: string) {
-      if (key === STORAGE_KEY) serialized = value;
-    }
-  };
-}
-
-function assertUnlocked(storage: KeyValueStorage): void {
-  const raw = storage.getItem(STORAGE_KEY);
-  if (!raw) return;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (isVaultEnvelope(parsed)) {
-      throw new Error('Applications are locked. Unlock with your passphrase first.');
-    }
-  } catch (err) {
-    if (err instanceof Error && /locked/i.test(err.message)) {
-      throw err;
-    }
-  }
-}
 
 type StoredApplication = Omit<Application, 'postingUrl'> & { postingUrl?: string };
 
@@ -62,23 +30,18 @@ function withPostingUrl(app: StoredApplication): Application {
 }
 
 export function getApplications(storage: KeyValueStorage): Application[] {
-  assertUnlocked(storage);
   const raw = storage.getItem(STORAGE_KEY);
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isApplicationRecord).map(withPostingUrl);
-  } catch (err) {
-    if (err instanceof Error && /locked/i.test(err.message)) {
-      throw err;
-    }
+  } catch {
     return [];
   }
 }
 
 function persist(storage: KeyValueStorage, apps: Application[]): Application[] {
-  assertUnlocked(storage);
   storage.setItem(STORAGE_KEY, JSON.stringify(apps));
   return apps;
 }

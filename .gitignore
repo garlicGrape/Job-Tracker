@@ -3,6 +3,9 @@ dist/
 coverage/
 *.log
 .DS_Store
+.env
+.env.local
+.data/
 
 # Editor
 .vscode/

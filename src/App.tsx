@@ -1,22 +1,8 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  addApplication,
-  createSessionStorage,
-  getApplications,
-  replaceApplications,
-  setOffer,
-  updateApplication,
-  type KeyValueStorage
-} from './lib/store';
-import {
-  inspectStorage,
-  lockApplications,
-  persistLocked,
-  unlockApplications,
-  wipeVault
-} from './lib/vault';
+import { createConfiguredAccountApi, isSupabaseConfigured } from './lib/supabase-account';
 import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv';
 import type { Application } from './lib/types';
+import type { PublicUser } from './lib/supabase-account';
 
 function todayIsoDate(): string {
   const now = new Date();
@@ -29,14 +15,15 @@ function isSafeHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
-type Gate = 'loading' | 'setup' | 'locked' | 'open';
-
 export default function App() {
-  const disk = useMemo(() => window.localStorage, []);
-  const sessionRef = useRef<KeyValueStorage>(createSessionStorage());
-  const passphraseRef = useRef('');
-  const [gate, setGate] = useState<Gate>('loading');
-  const [plaintextCount, setPlaintextCount] = useState(0);
+  const configured = isSupabaseConfigured();
+  const api = useMemo(() => (configured ? createConfiguredAccountApi() : null), [configured]);
+  const [user, setUser] = useState<PublicUser | null>(null);
+  const [ready, setReady] = useState(false);
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
   const [applications, setApplications] = useState<Application[]>([]);
   const [company, setCompany] = useState('');
   const [title, setTitle] = useState('');
@@ -44,8 +31,6 @@ export default function App() {
   const [receivedOffer, setReceivedOffer] = useState(false);
   const [postingUrl, setPostingUrl] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [passphrase, setPassphrase] = useState('');
-  const [passphraseConfirm, setPassphraseConfirm] = useState('');
   const [message, setMessage] = useState<{ text: string; kind: 'error' | 'success' | '' }>({
     text: '',
     kind: ''
@@ -55,99 +40,34 @@ export default function App() {
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
-    const kind = inspectStorage(disk);
-    if (kind === 'vault') {
-      setGate('locked');
-      return;
-    }
-    if (kind === 'plaintext') {
-      setPlaintextCount(getApplications(disk).length);
-    }
-    setGate('setup');
-  }, [disk]);
-
-  async function commit(next: Application[]) {
-    setApplications(next);
-    await persistLocked(disk, passphraseRef.current, next);
-  }
-
-  async function onCreateVault(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      if (passphrase !== passphraseConfirm) {
-        throw new Error('Passphrases do not match.');
+    let cancelled = false;
+    (async () => {
+      if (!api) {
+        setReady(true);
+        return;
       }
-      const existing = inspectStorage(disk) === 'plaintext' ? getApplications(disk) : [];
-      await lockApplications(disk, passphrase, existing);
-      passphraseRef.current = passphrase;
-      sessionRef.current = createSessionStorage(existing);
-      setApplications(existing);
-      setPassphrase('');
-      setPassphraseConfirm('');
-      setGate('open');
-      setMessage({
-        text: existing.length
-          ? 'Encrypted. Your list stays on this device.'
-          : 'Private vault created. Your list stays on this device.',
-        kind: 'success'
-      });
-    } catch (err) {
-      setMessage({
-        text: err instanceof Error ? err.message : 'Could not create vault.',
-        kind: 'error'
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onUnlock(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      const apps = await unlockApplications(disk, passphrase);
-      passphraseRef.current = passphrase;
-      sessionRef.current = createSessionStorage(apps);
-      setApplications(apps);
-      setPassphrase('');
-      setGate('open');
-      setMessage({ text: '', kind: '' });
-    } catch (err) {
-      setMessage({
-        text: err instanceof Error ? err.message : 'Could not unlock.',
-        kind: 'error'
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function onLock() {
-    passphraseRef.current = '';
-    sessionRef.current = createSessionStorage();
-    setApplications([]);
-    resetForm();
-    setMessage({ text: '', kind: '' });
-    setGate('locked');
-  }
-
-  function onResetVault() {
-    const confirmed = window.confirm(
-      'This permanently deletes the encrypted list on this device. Export a CSV first if you want a backup. Continue?'
-    );
-    if (!confirmed) return;
-    wipeVault(disk);
-    passphraseRef.current = '';
-    sessionRef.current = createSessionStorage();
-    setApplications([]);
-    setPlaintextCount(0);
-    setPassphrase('');
-    setPassphraseConfirm('');
-    resetForm();
-    setMessage({ text: 'Vault cleared on this device.', kind: 'success' });
-    setGate('setup');
-  }
+      try {
+        const restored = await api.restore();
+        if (cancelled) return;
+        if (restored) {
+          setUser(restored);
+          setApplications(await api.list());
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setMessage({
+            text: err instanceof Error ? err.message : 'Could not restore session.',
+            kind: 'error'
+          });
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
 
   function resetForm() {
     setCompany('');
@@ -158,8 +78,54 @@ export default function App() {
     setEditingId(null);
   }
 
+  async function onAuth(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      if (mode === 'signup' && password !== passwordConfirm) {
+        throw new Error('Passwords do not match.');
+      }
+      if (!api) {
+        throw new Error('Supabase is not configured.');
+      }
+      const nextUser = mode === 'signup' ? await api.signUp(email, password) : await api.signIn(email, password);
+      setUser(nextUser);
+      setApplications(await api.list());
+      setPassword('');
+      setPasswordConfirm('');
+      setMessage({ text: mode === 'signup' ? 'Account created.' : 'Signed in.', kind: 'success' });
+    } catch (err) {
+      setMessage({
+        text: err instanceof Error ? err.message : 'Could not sign in.',
+        kind: 'error'
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSignOut() {
+    if (!api) return;
+    setBusy(true);
+    try {
+      await api.signOut();
+      setUser(null);
+      setApplications([]);
+      resetForm();
+      setMessage({ text: 'Signed out.', kind: 'success' });
+    } catch (err) {
+      setMessage({
+        text: err instanceof Error ? err.message : 'Could not sign out.',
+        kind: 'error'
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!api) return;
     setBusy(true);
     try {
       const payload = {
@@ -170,10 +136,8 @@ export default function App() {
         postingUrl
       };
       const wasEditing = Boolean(editingId);
-      const next = editingId
-        ? updateApplication(sessionRef.current, editingId, payload)
-        : addApplication(sessionRef.current, payload);
-      await commit(next);
+      const next = editingId ? await api.update(editingId, payload) : await api.add(payload);
+      setApplications(next);
       resetForm();
       setMessage({ text: wasEditing ? 'Updated.' : 'Saved.', kind: 'success' });
     } catch (err) {
@@ -203,9 +167,9 @@ export default function App() {
   }
 
   async function onToggleOffer(id: string, checked: boolean) {
+    if (!api) return;
     try {
-      const next = setOffer(sessionRef.current, id, checked);
-      await commit(next);
+      setApplications(await api.setOffer(id, checked));
       if (editingId === id) {
         setReceivedOffer(checked);
       }
@@ -233,9 +197,11 @@ export default function App() {
           if (imported.length === 0) {
             throw new Error('No valid rows found in that CSV.');
           }
-          const existing = getApplications(sessionRef.current);
-          const next = replaceApplications(sessionRef.current, [...existing, ...imported]);
-          await commit(next);
+          if (!api) {
+            throw new Error('Supabase is not configured.');
+          }
+          const next = await api.replaceAll([...applications, ...imported]);
+          setApplications(next);
           setMessage({
             text: `Imported ${imported.length} application${imported.length === 1 ? '' : 's'}.`,
             kind: 'success'
@@ -272,108 +238,123 @@ export default function App() {
         <div>
           <h1>Job Tracker</h1>
           <p className="subtitle">
-            Private to this browser. Encrypted with your passphrase. Never uploaded.
+            {user
+              ? `Signed in as ${user.email}. Your listings stay private to this account.`
+              : 'Create an account, then add listings. They persist in your Supabase database.'}
           </p>
         </div>
-        {gate === 'open' ? (
-          <button type="button" className="secondary lock-btn" onClick={onLock}>
-            Lock
+        {user ? (
+          <button type="button" className="secondary lock-btn" onClick={() => void onSignOut()} disabled={busy}>
+            Sign out
           </button>
         ) : null}
       </header>
 
-      {gate === 'loading' ? <div className="card empty">Loading…</div> : null}
+      {!ready ? <div className="card empty">Loading…</div> : null}
 
-      {gate === 'setup' ? (
+      {ready && !configured ? (
         <div className="card lock-screen">
-          <h2>Create a private passphrase</h2>
+          <h2>Connect your Supabase project</h2>
           <p className="privacy-note">
-            Applications are saved only in this browser, encrypted so nobody else — including
-            anyone who opens this public site — can read them. There is no account and no
-            server. If you forget the passphrase, the list cannot be recovered unless you
-            exported a CSV.
+            Listings live in <strong>your</strong> Supabase Postgres database, private to the
+            account you sign in with. GitHub Pages and Lovable only serve the UI; they cannot
+            read the table. Create a free project, run <code>supabase/schema.sql</code> in the
+            SQL editor, then set <code>VITE_SUPABASE_URL</code> and{' '}
+            <code>VITE_SUPABASE_ANON_KEY</code> and rebuild.
           </p>
-          {plaintextCount > 0 ? (
-            <p className="privacy-note">
-              {plaintextCount} existing application{plaintextCount === 1 ? '' : 's'} on this
-              device will be encrypted when you continue.
-            </p>
-          ) : null}
-          <form className="lock-form" onSubmit={onCreateVault}>
+        </div>
+      ) : null}
+
+      {ready && configured && !user ? (
+        <div className="card lock-screen">
+          <div className="auth-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              className={mode === 'signin' ? 'auth-tab is-active' : 'auth-tab'}
+              aria-selected={mode === 'signin'}
+              onClick={() => {
+                setMode('signin');
+                setMessage({ text: '', kind: '' });
+              }}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className={mode === 'signup' ? 'auth-tab is-active' : 'auth-tab'}
+              aria-selected={mode === 'signup'}
+              onClick={() => {
+                setMode('signup');
+                setMessage({ text: '', kind: '' });
+              }}
+            >
+              Create account
+            </button>
+          </div>
+          <h2>{mode === 'signup' ? 'Create your account' : 'Sign in to your account'}</h2>
+          <p className="privacy-note">
+            Job listings are stored in your Supabase database, scoped to this email. Other
+            accounts cannot read them (row-level security). Export CSV anytime as a personal
+            backup. Ask Lovable to restyle this screen; leave <code>src/lib/</code> and{' '}
+            <code>supabase/schema.sql</code> alone.
+          </p>
+          <form className="lock-form" onSubmit={(event) => void onAuth(event)}>
             <div className="field">
-              <label htmlFor="new-passphrase">Passphrase</label>
+              <label htmlFor="email">Email</label>
               <input
-                type="password"
-                id="new-passphrase"
-                name="passphrase"
-                autoComplete="new-password"
-                minLength={8}
+                type="email"
+                id="email"
+                name="email"
+                autoComplete="email"
                 required
-                value={passphrase}
-                onChange={(e) => setPassphrase(e.target.value)}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
               />
             </div>
             <div className="field">
-              <label htmlFor="confirm-passphrase">Confirm passphrase</label>
+              <label htmlFor="password">Password</label>
               <input
                 type="password"
-                id="confirm-passphrase"
-                name="passphraseConfirm"
-                autoComplete="new-password"
+                id="password"
+                name="password"
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
                 minLength={8}
                 required
-                value={passphraseConfirm}
-                onChange={(e) => setPassphraseConfirm(e.target.value)}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
               />
             </div>
+            {mode === 'signup' ? (
+              <div className="field">
+                <label htmlFor="passwordConfirm">Confirm password</label>
+                <input
+                  type="password"
+                  id="passwordConfirm"
+                  name="passwordConfirm"
+                  autoComplete="new-password"
+                  minLength={8}
+                  required
+                  value={passwordConfirm}
+                  onChange={(e) => setPasswordConfirm(e.target.value)}
+                />
+              </div>
+            ) : null}
             <div className="actions">
               <span className={`msg${message.kind ? ' ' + message.kind : ''}`}>{message.text}</span>
               <button type="submit" className="primary" disabled={busy}>
-                Encrypt and continue
+                {mode === 'signup' ? 'Create account' : 'Sign in'}
               </button>
             </div>
           </form>
         </div>
       ) : null}
 
-      {gate === 'locked' ? (
-        <div className="card lock-screen">
-          <h2>Unlock your applications</h2>
-          <p className="privacy-note">
-            The encrypted list is still on this device from last time. Enter the same
-            passphrase to read it. It is never sent anywhere.
-          </p>
-          <form className="lock-form" onSubmit={onUnlock}>
-            <div className="field">
-              <label htmlFor="unlock-passphrase">Passphrase</label>
-              <input
-                type="password"
-                id="unlock-passphrase"
-                name="passphrase"
-                autoComplete="current-password"
-                minLength={8}
-                required
-                value={passphrase}
-                onChange={(e) => setPassphrase(e.target.value)}
-              />
-            </div>
-            <div className="actions">
-              <span className={`msg${message.kind ? ' ' + message.kind : ''}`}>{message.text}</span>
-              <button type="submit" className="primary" disabled={busy}>
-                Unlock
-              </button>
-            </div>
-          </form>
-          <button type="button" className="linkish reset-vault" onClick={onResetVault}>
-            Forgot passphrase? Reset this device
-          </button>
-        </div>
-      ) : null}
-
-      {gate === 'open' ? (
+      {ready && user && api ? (
         <>
           <div className="card">
-            <form className="app-form" onSubmit={onSubmit} ref={formRef}>
+            <form className="app-form" onSubmit={(event) => void onSubmit(event)} ref={formRef}>
               {editingId ? (
                 <p className="editing-note">Editing an existing application. Save or cancel when you are done.</p>
               ) : null}
@@ -507,7 +488,7 @@ export default function App() {
                           type="checkbox"
                           checked={app.receivedOffer}
                           aria-label={`Received offer from ${app.company}`}
-                          onChange={(e) => onToggleOffer(app.id, e.target.checked)}
+                          onChange={(e) => void onToggleOffer(app.id, e.target.checked)}
                         />
                       </td>
                       <td>

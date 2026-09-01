@@ -1,37 +1,37 @@
 # AGENTS.md
 
-Job Tracker is a **static Vite + React** web app that records job applications
-in `localStorage` (encrypted with a passphrase) and can export them as CSV. It
-is not a Google Apps Script project and it is not a Node server. Read this
-before changing code.
+Job Tracker is a **static Vite + React** web app. Accounts and listings live
+in **the user’s Supabase project** (Postgres + Auth + RLS). CSV is a backup
+export, not the database. It is not a Google Apps Script project.
 
 ## What this project is
 
-- `src/App.tsx` — the UI (lock screen + form). Vanilla React, no component library.
+- `src/App.tsx` — the UI (sign in / sign up + form). Vanilla React.
 - `src/lib/applications.ts` — validation, date checks, ids, formula escaping.
-- `src/lib/store.ts` — persistence behind a `{ getItem, setItem }` interface.
-- `src/lib/vault.ts` — passphrase encryption (AES-GCM). The passphrase is never stored.
-- `src/lib/csv.ts` — CSV export (and import for migrating from a sheet).
+- `src/lib/supabase-account.ts` — injected Supabase client; Auth + `applications`.
+- `src/lib/store.ts` — `{ getItem, setItem }` helpers used by unit tests.
+- `src/lib/csv.ts` — CSV export / import.
+- `supabase/schema.sql` — table + row-level security. Run in the SQL editor.
 - `test/*.test.ts` — Vitest suites that import `src/lib` directly.
 
 ## Hard constraints
 
-- **No backend.** Do not add Express, Apps Script, or a database unless the
-  user explicitly asks for one. Persistence is encrypted `localStorage`;
-  portability is CSV. A public host (GitHub Pages, Lovable) only serves the
-  app; it cannot read anyone's applications.
+- **Database is Supabase.** Do not add Express, Apps Script, a Google Sheet, or
+  a second database. Privacy is RLS (`auth.uid() = user_id`), not a passphrase
+  vault and not a service-role key in the client.
 - **Keep `src/lib` framework-free.** No React, no `window`, no `document` except
   inside `downloadCsv`. Tests import these modules from Node.
 - **Every text value written to CSV must pass through `escapeFormula`.** A
   value starting with `=`, `+`, `-`, or `@` is otherwise evaluated by Excel /
   Sheets. Storage itself keeps the original string so the table stays readable.
-- **Store dates as `YYYY-MM-DD` text, never `Date` objects.** Timezone
-  coercion will shift them by a day.
+- **Store dates as `YYYY-MM-DD` text, never `Date` objects.** The Postgres
+  column is `text` (`date_applied`) for the same reason.
 - **Never edit `test/harness.ts` to make a test pass.** Fix `src/lib` instead.
-- `npm test` is the gate. **Do not open a PR on red.**
-- GitHub Pages publishes `docs/` from `main` (legacy Jekyll, `/docs` folder).
-  After a UI change run `npm run build:pages` and commit `docs/`. CI fails if
-  `docs/` does not match the production build.
+- `npm test` is the gate. **Do not open a PR on red.** Tests must not need a
+  live Supabase project (use a fake client).
+- GitHub Pages publishes `docs/` from `main`. After a UI change run
+  `npm run build:pages` and commit `docs/`. Pass `VITE_SUPABASE_URL` and
+  `VITE_SUPABASE_ANON_KEY` at build time (repo Actions secrets).
 
 ## Commands
 
@@ -42,13 +42,15 @@ npm run dev       # Vite dev server (http://localhost:5173)
 npm run build     # static output in dist/
 ```
 
+Copy `.env.example` to `.env` for local sign-in.
+
 ## Cursor Cloud specific instructions
 
-- Cloud agents can run the full suite (`npm ci && npm test`) with no external
-  services. The optional `start` step in `.cursor/environment.json` runs Vite
-  so a human (or computer-use) can click through the UI.
-- Agents **can** verify the local Vite UI: create a passphrase, add a row,
-  lock, unlock, toggle offer, export CSV, import CSV. They **cannot** verify a
-  published GitHub Pages / Lovable URL unless that host is in this environment.
-- Do not add Google credentials, clasp tokens, or a bound spreadsheet. The
-  Google Sheet path is retired.
+- Cloud agents can run `npm ci && npm test` with no external services.
+- The optional `start` step runs Vite. Without `.env`, the UI shows
+  “Connect your Supabase project” — that is expected. Do not invent keys.
+- Agents **can** verify that setup/sign-in screens render. They **cannot**
+  complete a real sign-up unless `VITE_SUPABASE_*` is present in this
+  environment. They **cannot** verify a published GitHub Pages / Lovable URL
+  unless that host is in this environment.
+- Do not add Google credentials, clasp tokens, or a bound spreadsheet.
