@@ -1,0 +1,50 @@
+# Deploy the static app to GitHub Pages with runtime config injected
+# from repository secrets (never committed).
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_URL                 https://YOUR_PROJECT.supabase.co
+#   SUPABASE_PUBLISHABLE_KEY     sb_publishable_...
+#
+# Then set Pages source to GitHub Actions (Settings → Pages).
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Write runtime config from secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: node scripts/write-runtime-config.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deploy
+        uses: actions/deploy-pages@v4

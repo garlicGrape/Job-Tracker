@@ -62,19 +62,11 @@ function throwOn(error: { message: string } | null): void {
   }
 }
 
-export function isSupabaseConfigured(): boolean {
-  const url = import.meta.env.VITE_SUPABASE_URL;
-  const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  return Boolean(url && url.trim() && key && key.trim());
-}
-
-export function createConfiguredAccountApi(): AccountApi {
-  const url = import.meta.env.VITE_SUPABASE_URL;
-  const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  if (!url?.trim() || !key?.trim()) {
-    throw new Error('Supabase is not configured.');
-  }
-  return createSupabaseAccountApi(createClient(url.trim(), key.trim()));
+export function createAccountApiFromConfig(config: {
+  url: string;
+  publishableKey: string;
+}): AccountApi {
+  return createSupabaseAccountApi(createClient(config.url, config.publishableKey));
 }
 
 export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {

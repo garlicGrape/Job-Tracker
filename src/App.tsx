@@ -1,8 +1,8 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { createConfiguredAccountApi, isSupabaseConfigured } from './lib/supabase-account';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { createAccountApiFromConfig, type AccountApi, type PublicUser } from './lib/supabase-account';
+import { loadSupabaseConfig } from './lib/supabase-config';
 import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv';
 import type { Application } from './lib/types';
-import type { PublicUser } from './lib/supabase-account';
 
 function todayIsoDate(): string {
   const now = new Date();
@@ -16,8 +16,8 @@ function isSafeHttpUrl(value: string): boolean {
 }
 
 export default function App() {
-  const configured = isSupabaseConfigured();
-  const api = useMemo(() => (configured ? createConfiguredAccountApi() : null), [configured]);
+  const [api, setApi] = useState<AccountApi | null>(null);
+  const [configured, setConfigured] = useState(false);
   const [user, setUser] = useState<PublicUser | null>(null);
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
@@ -42,21 +42,36 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!api) {
-        setReady(true);
-        return;
-      }
       try {
-        const restored = await api.restore();
+        const config = await loadSupabaseConfig({
+          fetch: window.fetch.bind(window),
+          configUrl: new URL('config.json', window.location.href).href,
+          env: import.meta.env.DEV
+            ? {
+                url: import.meta.env.VITE_SUPABASE_URL,
+                publishableKey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+              }
+            : undefined
+        });
+        if (cancelled) return;
+        if (!config) {
+          setConfigured(false);
+          return;
+        }
+        const nextApi = createAccountApiFromConfig(config);
+        setApi(nextApi);
+        setConfigured(true);
+        const restored = await nextApi.restore();
         if (cancelled) return;
         if (restored) {
           setUser(restored);
-          setApplications(await api.list());
+          setApplications(await nextApi.list());
         }
       } catch (err) {
         if (!cancelled) {
+          setConfigured(false);
           setMessage({
-            text: err instanceof Error ? err.message : 'Could not restore session.',
+            text: err instanceof Error ? err.message : 'Could not load Supabase config.',
             kind: 'error'
           });
         }
@@ -67,7 +82,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, []);
 
   function resetForm() {
     setCompany('');
@@ -256,11 +271,18 @@ export default function App() {
         <div className="card lock-screen">
           <h2>Connect your Supabase project</h2>
           <p className="privacy-note">
-            Listings live in <strong>your</strong> Supabase Postgres database, private to the
-            account you sign in with. GitHub Pages and Lovable only serve the UI; they cannot
-            read the table. Create a free project, run <code>supabase/schema.sql</code> in the
-            SQL editor, then set <code>VITE_SUPABASE_URL</code> and{' '}
-            <code>VITE_SUPABASE_ANON_KEY</code> and rebuild.
+            Listings live in <strong>your</strong> Supabase Postgres database. The browser uses a
+            <strong> publishable</strong> key (<code>sb_publishable_...</code>), not a secret or
+            legacy JWT anon key. Row-level security is what keeps other accounts out. Do not commit
+            keys to git.
+          </p>
+          <p className="privacy-note">
+            In Supabase: <strong>Settings → API Keys</strong> → create the new keys if needed → copy
+            the <strong>publishable</strong> key. Locally copy <code>public/config.example.json</code>{' '}
+            to <code>public/config.json</code> (gitignored) with your project URL and that key, then
+            restart <code>npm run dev</code>. For GitHub Pages, store the same two values as
+            repository secrets and use the Pages deploy workflow — they are injected at deploy time,
+            not committed.
           </p>
         </div>
       ) : null}
