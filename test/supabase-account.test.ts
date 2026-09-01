@@ -205,6 +205,42 @@ describe('Supabase account API', () => {
     expect(adas.map((a) => a.company)).toEqual(['AdaCorp']);
   });
 
+  it('removes a listing without touching the rest of the account', async () => {
+    const api = createSupabaseAccountApi(createFakeSupabase());
+    await api.signUp('me@example.com', 'correct-horse');
+    await api.add({ company: 'KeepCo', title: 'Eng', dateApplied: '2026-01-01' });
+    await api.add({ company: 'DropCo', title: 'PM', dateApplied: '2026-02-01' });
+    const before = await api.list();
+    expect(before.map((a) => a.company)).toEqual(['KeepCo', 'DropCo']);
+    const drop = before.find((a) => a.company === 'DropCo');
+    expect(drop).toBeDefined();
+    const after = await api.remove(drop!.id);
+    expect(after.map((a) => a.company)).toEqual(['KeepCo']);
+  });
+
+  it('does not delete another account’s listing', async () => {
+    const client = createFakeSupabase();
+    const api = createSupabaseAccountApi(client);
+    await api.signUp('ada@example.com', 'password1');
+    await api.add({ company: 'AdaCorp', title: 'PM', dateApplied: '2026-01-01' });
+    const adaList = await api.list();
+    await api.signOut();
+    await api.signUp('bob@example.com', 'password1');
+    await api.add({ company: 'BobLLC', title: 'Eng', dateApplied: '2026-02-01' });
+    await api.remove(adaList[0].id);
+    const bobs = await api.list();
+    expect(bobs.map((a) => a.company)).toEqual(['BobLLC']);
+    await api.signOut();
+    await api.signIn('ada@example.com', 'password1');
+    expect((await api.list()).map((a) => a.company)).toEqual(['AdaCorp']);
+  });
+
+  it('rejects remove without a valid id', async () => {
+    const api = createSupabaseAccountApi(createFakeSupabase());
+    await api.signUp('me@example.com', 'correct-horse');
+    await expect(api.remove('')).rejects.toThrow(/invalid application id/i);
+  });
+
   it('rejects a wrong password', async () => {
     const api = createSupabaseAccountApi(createFakeSupabase());
     await api.signUp('me@example.com', 'correct-horse');

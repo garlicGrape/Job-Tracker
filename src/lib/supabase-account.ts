@@ -19,6 +19,7 @@ export type AccountApi = {
   list(): Promise<Application[]>;
   add(input: ApplicationInput): Promise<Application[]>;
   update(id: string, input: ApplicationInput): Promise<Application[]>;
+  remove(id: string): Promise<Application[]>;
   setOffer(id: string, received: boolean): Promise<Application[]>;
   replaceAll(apps: Application[]): Promise<Application[]>;
 };
@@ -144,6 +145,16 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
           posting_url: app.postingUrl
         })
         .eq('id', id);
+      throwOn(error);
+      return list();
+    },
+
+    async remove(id) {
+      await requireUser();
+      if (!id || typeof id !== 'string') {
+        throw new Error('Invalid application id.');
+      }
+      const { error } = await client.from('applications').delete().eq('id', id);
       throwOn(error);
       return list();
     },
