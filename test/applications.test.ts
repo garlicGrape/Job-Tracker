@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { addApplication, getApplications, setOffer, updateApplication } from '../src/lib/store';
+import {
+  addApplication,
+  getApplications,
+  removeApplication,
+  setOffer,
+  updateApplication
+} from '../src/lib/store';
 import { createMemoryStorage, storedRows } from './harness';
 
 describe('reading applications', () => {
@@ -183,6 +189,34 @@ describe('updateApplication', () => {
       })
     ).toThrow(/company is required/i);
     expect(getApplications(storage)[0].company).toBe('Acme');
+  });
+});
+
+describe('removeApplication', () => {
+  it('deletes the matching application and keeps the rest', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-08-20'
+    });
+    addApplication(storage, {
+      company: 'Globex',
+      title: 'PM',
+      dateApplied: '2026-08-25'
+    });
+    const next = removeApplication(storage, first.id);
+    expect(next).toHaveLength(1);
+    expect(next[0].company).toBe('Globex');
+    expect(getApplications(storage)).toHaveLength(1);
+  });
+
+  it('rejects a missing id', () => {
+    const storage = createMemoryStorage();
+    addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-08-20' });
+    expect(() => removeApplication(storage, 'missing-id')).toThrow(/not found/i);
+    expect(() => removeApplication(storage, '')).toThrow(/invalid application id/i);
+    expect(getApplications(storage)).toHaveLength(1);
   });
 });
 

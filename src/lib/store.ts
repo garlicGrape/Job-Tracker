@@ -80,6 +80,24 @@ export function updateApplication(
 }
 
 /**
+ * Remove an application by id. Returns the remaining list.
+ */
+export function removeApplication(storage: KeyValueStorage, id: string): Application[] {
+  if (!id || typeof id !== 'string') {
+    throw new Error('Invalid application id.');
+  }
+  const apps = getApplications(storage);
+  const idx = apps.findIndex((a) => a.id === id);
+  if (idx < 0) {
+    throw new Error('Application not found.');
+  }
+  return persist(
+    storage,
+    apps.filter((a) => a.id !== id)
+  );
+}
+
+/**
  * Toggle the "Received Offer" flag for a specific application id.
  */
 export function setOffer(

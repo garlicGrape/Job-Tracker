@@ -51,6 +51,13 @@ CAPTCHA key; that setting stays in your project.
 The free-tier database size and the 500-row cap are what prevent “crash the
 database.” Postgres will not fall over from 500 short rows.
 
+**If you apply to a lot of jobs:** 500 is a ceiling against abuse, not a daily
+quota. A heavy search is usually dozens to a couple of hundred listings. You
+can sit at 200 rows and keep adding. The 30-per-10-minutes limit is on *saves*
+(clicking Add, or one CSV import), not on how many jobs you apply to overall.
+Importing a backup CSV counts as one write. Delete rows you are done with if
+you ever near 500.
+
 ### Why a key in the browser is not a “database password”
 
 Anyone can open DevTools and read whatever the frontend uses. That is true of
@@ -81,8 +88,8 @@ Browser
 
 1. **Account** — create an account or sign in. The session is a Supabase Auth
    JWT in the browser.
-2. **Add / edit** — validated, then written to `applications` as *your* row.
-3. **Offer checkbox** — updates only that row’s `received_offer`.
+2. **Add / edit / delete** — validated, then written to `applications` as *your* row. Delete asks for a second click to confirm.
+3. **Offer status** — updates only that row’s `received_offer`.
 4. **Export CSV** — download a copy. Formula-looking values get a leading `'`.
 5. **Import CSV** — appends those rows to *your* account.
 

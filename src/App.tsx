@@ -5,6 +5,8 @@ import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv'
 import { LIMITS, assertCsvByteSize } from './lib/applications';
 import type { Application } from './lib/types';
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 function todayIsoDate(): string {
   const now = new Date();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -14,6 +16,35 @@ function todayIsoDate(): string {
 
 function isSafeHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
+}
+
+function formatDisplayDate(iso: string): string {
+  const parts = iso.split('-');
+  if (parts.length !== 3) return iso;
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (!year || month < 1 || month > 12 || !day) return iso;
+  return `${MONTHS[month - 1]} ${day}, ${year}`;
+}
+
+function BriefcaseIcon() {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect width="20" height="14" x="2" y="7" rx="2" ry="2"></rect>
+      <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+    </svg>
+  );
 }
 
 export default function App() {
@@ -32,6 +63,7 @@ export default function App() {
   const [receivedOffer, setReceivedOffer] = useState(false);
   const [postingUrl, setPostingUrl] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; kind: 'error' | 'success' | '' }>({
     text: '',
     kind: ''
@@ -128,6 +160,7 @@ export default function App() {
       setUser(null);
       setApplications([]);
       resetForm();
+      setPendingDeleteId(null);
       setMessage({ text: 'Signed out.', kind: 'success' });
     } catch (err) {
       setMessage({
@@ -155,6 +188,7 @@ export default function App() {
       const next = editingId ? await api.update(editingId, payload) : await api.add(payload);
       setApplications(next);
       resetForm();
+      setPendingDeleteId(null);
       setMessage({ text: wasEditing ? 'Updated.' : 'Saved.', kind: 'success' });
     } catch (err) {
       setMessage({
@@ -173,6 +207,7 @@ export default function App() {
     setDateApplied(app.dateApplied);
     setReceivedOffer(app.receivedOffer);
     setPostingUrl(app.postingUrl);
+    setPendingDeleteId(null);
     setMessage({ text: '', kind: '' });
     formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -180,6 +215,32 @@ export default function App() {
   function onCancelEdit() {
     resetForm();
     setMessage({ text: '', kind: '' });
+  }
+
+  async function onDelete(id: string) {
+    if (!api) return;
+    if (pendingDeleteId !== id) {
+      setPendingDeleteId(id);
+      setMessage({ text: '', kind: '' });
+      return;
+    }
+    setBusy(true);
+    try {
+      const next = await api.remove(id);
+      setApplications(next);
+      setPendingDeleteId(null);
+      if (editingId === id) {
+        resetForm();
+      }
+      setMessage({ text: 'Deleted.', kind: 'success' });
+    } catch (err) {
+      setMessage({
+        text: err instanceof Error ? err.message : 'Could not delete.',
+        kind: 'error'
+      });
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onToggleOffer(id: string, checked: boolean) {
@@ -242,319 +303,412 @@ export default function App() {
     reader.readAsText(file);
   }
 
+  const offerCount = applications.filter((app) => app.receivedOffer).length;
+  const waitingCount = applications.length - offerCount;
+
   return (
-    <div className="wrap">
-      <header className="hero">
-        <div className="logo" aria-hidden="true">
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect width="20" height="14" x="2" y="7" rx="2" ry="2"></rect>
-            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
-          </svg>
-        </div>
-        <div>
-          <h1>Job Tracker</h1>
-          <p className="subtitle">
-            {user
-              ? `Signed in as ${user.email}. Your listings stay private to this account.`
-              : 'Create an account, then add listings. They persist in your Supabase database.'}
-          </p>
-        </div>
-        {user ? (
-          <button type="button" className="secondary lock-btn" onClick={() => void onSignOut()} disabled={busy}>
-            Sign out
-          </button>
-        ) : null}
-      </header>
-
-      {!ready ? <div className="card empty">Loading…</div> : null}
-
-      {ready && !configured ? (
-        <div className="card lock-screen">
-          <h2>Connect your Supabase project</h2>
-          <p className="privacy-note">
-            Listings live in <strong>your</strong> Supabase Postgres database. The browser uses a
-            <strong> publishable</strong> key (<code>sb_publishable_...</code>), not a secret or
-            legacy JWT anon key. Row-level security is what keeps other accounts out. Do not commit
-            keys to git.
-          </p>
-          <p className="privacy-note">
-            In Supabase: <strong>Settings → API Keys</strong> → create the new keys if needed → copy
-            the <strong>publishable</strong> key. Locally copy <code>public/config.example.json</code>{' '}
-            to <code>public/config.json</code> (gitignored) with your project URL and that key, then
-            restart <code>npm run dev</code>. For GitHub Pages, store the same two values as
-            repository secrets and use the Pages deploy workflow — they are injected at deploy time,
-            not committed.
-          </p>
-        </div>
-      ) : null}
-
-      {ready && configured && !user ? (
-        <div className="card lock-screen">
-          <div className="auth-tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              className={mode === 'signin' ? 'auth-tab is-active' : 'auth-tab'}
-              aria-selected={mode === 'signin'}
-              onClick={() => {
-                setMode('signin');
-                setMessage({ text: '', kind: '' });
-              }}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              role="tab"
-              className={mode === 'signup' ? 'auth-tab is-active' : 'auth-tab'}
-              aria-selected={mode === 'signup'}
-              onClick={() => {
-                setMode('signup');
-                setMessage({ text: '', kind: '' });
-              }}
-            >
-              Create account
-            </button>
+    <div className="page">
+      <div className="wrap">
+        <header className="hero">
+          <div className="logo">
+            <BriefcaseIcon />
           </div>
-          <h2>{mode === 'signup' ? 'Create your account' : 'Sign in to your account'}</h2>
-          <p className="privacy-note">
-            Job listings are stored in your Supabase database, scoped to this email. Other
-            accounts cannot read them (row-level security). Postgres also caps each account
-            at {LIMITS.maxApplicationsPerUser} listings and rejects oversized or malformed
-            rows, even if someone bypasses this form. Export CSV anytime as a personal
-            backup. Ask Lovable to restyle this screen; leave <code>src/lib/</code> and{' '}
-            <code>supabase/schema.sql</code> alone.
-          </p>
-          <form className="lock-form" onSubmit={(event) => void onAuth(event)}>
-            <div className="field">
-              <label htmlFor="email">Email</label>
-              <input
-                type="email"
-                id="email"
-                name="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="password">Password</label>
-              <input
-                type="password"
-                id="password"
-                name="password"
-                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                minLength={8}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-            {mode === 'signup' ? (
-              <div className="field">
-                <label htmlFor="passwordConfirm">Confirm password</label>
-                <input
-                  type="password"
-                  id="passwordConfirm"
-                  name="passwordConfirm"
-                  autoComplete="new-password"
-                  minLength={8}
-                  required
-                  value={passwordConfirm}
-                  onChange={(e) => setPasswordConfirm(e.target.value)}
-                />
-              </div>
-            ) : null}
-            <div className="actions">
-              <span className={`msg${message.kind ? ' ' + message.kind : ''}`}>{message.text}</span>
-              <button type="submit" className="primary" disabled={busy}>
-                {mode === 'signup' ? 'Create account' : 'Sign in'}
+          <div className="hero-copy">
+            <p className="eyebrow">Personal pipeline</p>
+            <h1>Job Tracker</h1>
+            <p className="subtitle">
+              {user
+                ? `Signed in as ${user.email}. Listings stay private to this account.`
+                : 'Create an account, then add listings. They persist in your Supabase database.'}
+            </p>
+          </div>
+          {user ? (
+            <button type="button" className="secondary lock-btn" onClick={() => void onSignOut()} disabled={busy}>
+              Sign out
+            </button>
+          ) : null}
+        </header>
+
+        {!ready ? <div className="card empty">Loading…</div> : null}
+
+        {ready && !configured ? (
+          <div className="card lock-screen">
+            <p className="kicker">Setup</p>
+            <h2>Connect your Supabase project</h2>
+            <p className="privacy-note">
+              Listings live in <strong>your</strong> Supabase Postgres database. The browser uses a
+              <strong> publishable</strong> key (<code>sb_publishable_...</code>), not a secret or
+              legacy JWT anon key. Row-level security is what keeps other accounts out. Do not commit
+              keys to git.
+            </p>
+            <ol className="setup-steps">
+              <li>
+                In Supabase: <strong>Settings → API Keys</strong> → copy the project URL and the{' '}
+                <strong>publishable</strong> key.
+              </li>
+              <li>
+                Locally copy <code>public/config.example.json</code> to <code>public/config.json</code>{' '}
+                (gitignored), then restart <code>npm run dev</code>.
+              </li>
+              <li>
+                For GitHub Pages, store the same two values as repository secrets. They are injected
+                at deploy time, not committed.
+              </li>
+            </ol>
+          </div>
+        ) : null}
+
+        {ready && configured && !user ? (
+          <div className="card lock-screen">
+            <div className="auth-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                className={mode === 'signin' ? 'auth-tab is-active' : 'auth-tab'}
+                aria-selected={mode === 'signin'}
+                onClick={() => {
+                  setMode('signin');
+                  setMessage({ text: '', kind: '' });
+                }}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={mode === 'signup' ? 'auth-tab is-active' : 'auth-tab'}
+                aria-selected={mode === 'signup'}
+                onClick={() => {
+                  setMode('signup');
+                  setMessage({ text: '', kind: '' });
+                }}
+              >
+                Create account
               </button>
             </div>
-          </form>
-        </div>
-      ) : null}
-
-      {ready && user && api ? (
-        <>
-          <div className="card">
-            <form className="app-form" onSubmit={(event) => void onSubmit(event)} ref={formRef}>
-              {editingId ? (
-                <p className="editing-note">Editing an existing application. Save or cancel when you are done.</p>
-              ) : null}
+            <h2>{mode === 'signup' ? 'Create your account' : 'Welcome back'}</h2>
+            <p className="privacy-note">
+              Job listings are stored in your Supabase database, scoped to this email. Other accounts
+              cannot read them. Each account can keep up to {LIMITS.maxApplicationsPerUser} listings
+              — enough for a heavy search — and oversized or malformed rows are rejected even if
+              someone bypasses this form. Export CSV anytime as a personal backup.
+            </p>
+            <form className="lock-form" onSubmit={(event) => void onAuth(event)}>
               <div className="field">
-                <label htmlFor="company">Company</label>
+                <label htmlFor="email">Email</label>
                 <input
-                  type="text"
-                  id="company"
-                  name="company"
-                  placeholder="Acme Corp"
+                  type="email"
+                  id="email"
+                  name="email"
+                  autoComplete="email"
                   required
-                  maxLength={LIMITS.maxCompanyLength}
-                  value={company}
-                  onChange={(e) => setCompany(e.target.value)}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                 />
               </div>
               <div className="field">
-                <label htmlFor="title">Title</label>
+                <label htmlFor="password">Password</label>
                 <input
-                  type="text"
-                  id="title"
-                  name="title"
-                  placeholder="Senior Engineer"
+                  type="password"
+                  id="password"
+                  name="password"
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  minLength={8}
                   required
-                  maxLength={LIMITS.maxTitleLength}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                 />
               </div>
-              <div className="field">
-                <label htmlFor="dateApplied">Date Applied</label>
-                <input
-                  type="date"
-                  id="dateApplied"
-                  name="dateApplied"
-                  required
-                  value={dateApplied}
-                  onChange={(e) => setDateApplied(e.target.value)}
-                />
-              </div>
-              <div className="field">
-                <div className="checkbox-row">
+              {mode === 'signup' ? (
+                <div className="field">
+                  <label htmlFor="passwordConfirm">Confirm password</label>
                   <input
-                    type="checkbox"
-                    id="receivedOffer"
-                    name="receivedOffer"
-                    checked={receivedOffer}
-                    onChange={(e) => setReceivedOffer(e.target.checked)}
+                    type="password"
+                    id="passwordConfirm"
+                    name="passwordConfirm"
+                    autoComplete="new-password"
+                    minLength={8}
+                    required
+                    value={passwordConfirm}
+                    onChange={(e) => setPasswordConfirm(e.target.value)}
                   />
-                  <label htmlFor="receivedOffer">Received offer</label>
                 </div>
-              </div>
-              <div className="field field-wide">
-                <label htmlFor="postingUrl">Posting URL</label>
-                <input
-                  type="text"
-                  id="postingUrl"
-                  name="postingUrl"
-                  inputMode="url"
-                  placeholder="https://jobs.example.com/role"
-                  maxLength={LIMITS.maxPostingUrlLength}
-                  value={postingUrl}
-                  onChange={(e) => setPostingUrl(e.target.value)}
-                />
-              </div>
+              ) : null}
               <div className="actions">
-                <span className={`msg${message.kind ? ' ' + message.kind : ''}`}>{message.text}</span>
-                {editingId ? (
-                  <button type="button" className="secondary" onClick={onCancelEdit} disabled={busy}>
-                    Cancel
-                  </button>
-                ) : null}
+                <span className={`msg${message.kind ? ' ' + message.kind : ''}`} role="status">
+                  {message.text}
+                </span>
                 <button type="submit" className="primary" disabled={busy}>
-                  {editingId ? 'Save changes' : 'Add application'}
+                  {mode === 'signup' ? 'Create account' : 'Sign in'}
                 </button>
               </div>
             </form>
           </div>
+        ) : null}
 
-          <div className="section-head">
-            <h2>Your applications ({applications.length}/{LIMITS.maxApplicationsPerUser})</h2>
-            <div className="toolbar">
-              <input
-                ref={fileRef}
-                className="file-input"
-                type="file"
-                accept=".csv,text/csv"
-                aria-label="Import CSV"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) onImportFile(file);
-                  e.target.value = '';
-                }}
-              />
-              <button type="button" className="secondary" onClick={() => fileRef.current?.click()}>
-                Import CSV
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                onClick={onExport}
-                disabled={applications.length === 0}
-              >
-                Export CSV
-              </button>
+        {ready && user && api ? (
+          <>
+            <div className="stats" aria-label="Application summary">
+              <div className="stat">
+                <span className="stat-value">
+                  {applications.length}
+                  <span className="stat-cap">/{LIMITS.maxApplicationsPerUser}</span>
+                </span>
+                <span className="stat-label">{applications.length === 1 ? 'Application' : 'Applications'}</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{offerCount}</span>
+                <span className="stat-label">{offerCount === 1 ? 'Offer' : 'Offers'}</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{waitingCount}</span>
+                <span className="stat-label">Waiting</span>
+              </div>
             </div>
-          </div>
 
-          {applications.length === 0 ? (
-            <div className="card empty">No applications yet. Add your first one above.</div>
-          ) : (
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Company</th>
-                    <th>Title</th>
-                    <th>Date Applied</th>
-                    <th>Offer</th>
-                    <th>Posting</th>
-                    <th>
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {applications.map((app) => (
-                    <tr key={app.id} className={editingId === app.id ? 'is-editing' : undefined}>
-                      <td>{app.company}</td>
-                      <td>{app.title}</td>
-                      <td>{app.dateApplied}</td>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={app.receivedOffer}
-                          aria-label={`Received offer from ${app.company}`}
-                          onChange={(e) => void onToggleOffer(app.id, e.target.checked)}
-                        />
-                      </td>
-                      <td>
-                        {app.postingUrl && isSafeHttpUrl(app.postingUrl) ? (
-                          <a href={app.postingUrl} target="_blank" rel="noopener noreferrer">
-                            View posting
-                          </a>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="linkish"
-                          onClick={() => onEdit(app)}
-                          aria-label={`Edit ${app.company} ${app.title}`}
-                        >
-                          Edit
-                        </button>
-                      </td>
+            <div className="card form-card">
+              <div className="card-head">
+                <h2>{editingId ? 'Edit application' : 'Add an application'}</h2>
+                {editingId ? (
+                  <p className="editing-note">Save or cancel when you are done.</p>
+                ) : (
+                  <p className="card-lede">Company, title, and date are required.</p>
+                )}
+              </div>
+              <form className="app-form" onSubmit={(event) => void onSubmit(event)} ref={formRef}>
+                <div className="field">
+                  <label htmlFor="company">Company</label>
+                  <input
+                    type="text"
+                    id="company"
+                    name="company"
+                    placeholder="Acme Corp"
+                    required
+                    maxLength={LIMITS.maxCompanyLength}
+                    value={company}
+                    onChange={(e) => setCompany(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="title">Title</label>
+                  <input
+                    type="text"
+                    id="title"
+                    name="title"
+                    placeholder="Senior Engineer"
+                    required
+                    maxLength={LIMITS.maxTitleLength}
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="dateApplied">Date applied</label>
+                  <input
+                    type="date"
+                    id="dateApplied"
+                    name="dateApplied"
+                    required
+                    value={dateApplied}
+                    onChange={(e) => setDateApplied(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <div className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      id="receivedOffer"
+                      name="receivedOffer"
+                      checked={receivedOffer}
+                      onChange={(e) => setReceivedOffer(e.target.checked)}
+                    />
+                    <label htmlFor="receivedOffer">Received offer</label>
+                  </div>
+                </div>
+                <div className="field field-wide">
+                  <label htmlFor="postingUrl">Posting URL</label>
+                  <input
+                    type="text"
+                    id="postingUrl"
+                    name="postingUrl"
+                    inputMode="url"
+                    placeholder="https://jobs.example.com/role"
+                    maxLength={LIMITS.maxPostingUrlLength}
+                    value={postingUrl}
+                    onChange={(e) => setPostingUrl(e.target.value)}
+                  />
+                </div>
+                <div className="actions">
+                  <span className={`msg${message.kind ? ' ' + message.kind : ''}`} role="status">
+                    {message.text}
+                  </span>
+                  {editingId ? (
+                    <button type="button" className="secondary" onClick={onCancelEdit} disabled={busy}>
+                      Cancel
+                    </button>
+                  ) : null}
+                  <button type="submit" className="primary" disabled={busy}>
+                    {editingId ? 'Save changes' : 'Add application'}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div className="section-head">
+              <div>
+                <h2>Your applications</h2>
+                <p className="section-lede">
+                  {applications.length === 0
+                    ? 'Nothing here yet.'
+                    : `${applications.length} of ${LIMITS.maxApplicationsPerUser} saved · edit or delete any row`}
+                </p>
+              </div>
+              <div className="toolbar">
+                <input
+                  ref={fileRef}
+                  className="file-input"
+                  type="file"
+                  accept=".csv,text/csv"
+                  aria-label="Import CSV"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) onImportFile(file);
+                    e.target.value = '';
+                  }}
+                />
+                <button type="button" className="secondary" onClick={() => fileRef.current?.click()}>
+                  Import CSV
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={onExport}
+                  disabled={applications.length === 0}
+                >
+                  Export CSV
+                </button>
+              </div>
+            </div>
+
+            {applications.length === 0 ? (
+              <div className="card empty">
+                <div className="empty-icon" aria-hidden="true">
+                  <BriefcaseIcon />
+                </div>
+                <p className="empty-title">No applications yet</p>
+                <p>Add your first listing above, or import a CSV backup.</p>
+              </div>
+            ) : (
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Company</th>
+                      <th>Title</th>
+                      <th>Date applied</th>
+                      <th>Offer</th>
+                      <th>Posting</th>
+                      <th>
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      ) : null}
+                  </thead>
+                  <tbody>
+                    {applications.map((app) => (
+                      <tr
+                        key={app.id}
+                        className={[
+                          editingId === app.id ? 'is-editing' : '',
+                          pendingDeleteId === app.id ? 'is-pending-delete' : ''
+                        ]
+                          .filter(Boolean)
+                          .join(' ') || undefined}
+                      >
+                        <td data-label="Company">
+                          <span className="cell-strong">{app.company}</span>
+                        </td>
+                        <td data-label="Title">{app.title}</td>
+                        <td data-label="Date applied">
+                          <time dateTime={app.dateApplied}>{formatDisplayDate(app.dateApplied)}</time>
+                        </td>
+                        <td data-label="Offer">
+                          <button
+                            type="button"
+                            className={app.receivedOffer ? 'offer-pill is-on' : 'offer-pill'}
+                            aria-pressed={app.receivedOffer}
+                            aria-label={
+                              app.receivedOffer
+                                ? `Offer from ${app.company}. Click to mark as waiting.`
+                                : `No offer from ${app.company}. Click to mark as received.`
+                            }
+                            onClick={() => void onToggleOffer(app.id, !app.receivedOffer)}
+                          >
+                            {app.receivedOffer ? 'Offer' : 'Waiting'}
+                          </button>
+                        </td>
+                        <td data-label="Posting">
+                          {app.postingUrl && isSafeHttpUrl(app.postingUrl) ? (
+                            <a href={app.postingUrl} target="_blank" rel="noopener noreferrer">
+                              View posting
+                            </a>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                        <td data-label="Actions">
+                          <div className="row-actions">
+                            {pendingDeleteId === app.id ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="danger"
+                                  onClick={() => void onDelete(app.id)}
+                                  disabled={busy}
+                                  aria-label={`Confirm delete ${app.company} ${app.title}`}
+                                >
+                                  Confirm delete
+                                </button>
+                                <button
+                                  type="button"
+                                  className="linkish"
+                                  onClick={() => setPendingDeleteId(null)}
+                                  disabled={busy}
+                                >
+                                  Keep
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="linkish"
+                                  onClick={() => onEdit(app)}
+                                  aria-label={`Edit ${app.company} ${app.title}`}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="linkish danger-text"
+                                  onClick={() => void onDelete(app.id)}
+                                  disabled={busy}
+                                  aria-label={`Delete ${app.company} ${app.title}`}
+                                >
+                                  Delete
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }
