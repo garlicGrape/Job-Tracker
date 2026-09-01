@@ -1,5 +1,5 @@
 import { HEADERS, type Application } from './types';
-import { createApplication, escapeFormula, isValidDate, toBoolean } from './applications';
+import { createApplication, escapeFormula, isValidDate, isValidHttpUrl, normalizePostingUrl, toBoolean } from './applications';
 
 function csvField(value: string): string {
   if (/[",\n\r]/.test(value)) {
@@ -20,7 +20,8 @@ export function applicationsToCsv(apps: Application[]): string {
         csvField(escapeFormula(app.company)),
         csvField(escapeFormula(app.title)),
         csvField(app.dateApplied),
-        app.receivedOffer ? 'TRUE' : 'FALSE'
+        app.receivedOffer ? 'TRUE' : 'FALSE',
+        csvField(escapeFormula(app.postingUrl))
       ].join(',')
     );
   }
@@ -70,8 +71,9 @@ function unescapeImported(value: string): string {
 }
 
 /**
- * Parse a CSV produced by this app (or a 4-column Google Sheet export with
- * the same headers) into application records. Invalid rows are skipped.
+ * Parse a CSV produced by this app (or a Google Sheet export with the same
+ * headers) into application records. A 4-column sheet without Posting URL
+ * still imports; that field is left blank. Invalid rows are skipped.
  */
 export function parseApplicationsCsv(text: string): Application[] {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -86,10 +88,12 @@ export function parseApplicationsCsv(text: string): Application[] {
     const title = unescapeImported(cols[1] ?? '');
     const dateApplied = (cols[2] ?? '').trim();
     const receivedOffer = toBoolean((cols[3] ?? '').trim());
+    const normalizedUrl = normalizePostingUrl(unescapeImported(cols[4] ?? ''));
+    const postingUrl = isValidHttpUrl(normalizedUrl) ? normalizedUrl : '';
     if (!company && !title) continue;
     if (!isValidDate(dateApplied)) continue;
     try {
-      apps.push(createApplication({ company, title, dateApplied, receivedOffer }));
+      apps.push(createApplication({ company, title, dateApplied, receivedOffer, postingUrl }));
     } catch {
       // Skip rows that fail the same validation the form uses.
     }

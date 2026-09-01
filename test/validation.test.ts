@@ -74,4 +74,68 @@ describe('validation', () => {
     });
     expect(missing[0].receivedOffer).toBe(false);
   });
+
+  it('accepts an omitted posting URL', () => {
+    const storage = createMemoryStorage();
+    const result = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-01-01'
+    });
+    expect(result[0].postingUrl).toBe('');
+  });
+
+  it('stores a valid posting URL', () => {
+    const storage = createMemoryStorage();
+    const result = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-01-01',
+      postingUrl: 'https://jobs.acme.test/dev'
+    });
+    expect(result[0].postingUrl).toBe('https://jobs.acme.test/dev');
+  });
+
+  it('prefixes https:// when a hostname is pasted without a scheme', () => {
+    const storage = createMemoryStorage();
+    const result = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-01-01',
+      postingUrl: 'jobs.acme.test/dev'
+    });
+    expect(result[0].postingUrl).toBe('https://jobs.acme.test/dev');
+  });
+
+  it('trims whitespace on the posting URL', () => {
+    const storage = createMemoryStorage();
+    const result = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-01-01',
+      postingUrl: '  https://jobs.acme.test/dev  '
+    });
+    expect(result[0].postingUrl).toBe('https://jobs.acme.test/dev');
+  });
+
+  it('rejects a non-http posting URL', () => {
+    const storage = createMemoryStorage();
+    expect(() =>
+      addApplication(storage, {
+        company: 'Acme',
+        title: 'Dev',
+        dateApplied: '2026-01-01',
+        postingUrl: 'javascript:alert(1)'
+      })
+    ).toThrow(/posting url/i);
+    expect(() =>
+      addApplication(storage, {
+        company: 'Acme',
+        title: 'Dev',
+        dateApplied: '2026-01-01',
+        postingUrl: 'not a url'
+      })
+    ).toThrow(/posting url/i);
+  });
 });
+

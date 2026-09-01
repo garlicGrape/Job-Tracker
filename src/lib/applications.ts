@@ -56,6 +56,32 @@ export function isValidDate(value: string): boolean {
 }
 
 /**
+ * Trim a posting URL and, when the value has no scheme, prefix https:// so
+ * pasted hostnames like linkedin.com/jobs/view/123 still round-trip.
+ */
+export function normalizePostingUrl(value: unknown): string {
+  const trimmed = (value == null ? '' : String(value)).trim();
+  if (!trimmed) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    return trimmed;
+  }
+  return 'https://' + trimmed;
+}
+
+/**
+ * True when value is empty (URL is optional) or a real http(s) URL.
+ */
+export function isValidHttpUrl(value: string): boolean {
+  if (!value) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Validate and normalize a raw application payload. Returns a clean object
  * without an id; throws on invalid input.
  */
@@ -68,6 +94,7 @@ export function validateApplication(
   const company = (app.company == null ? '' : String(app.company)).trim();
   const title = (app.title == null ? '' : String(app.title)).trim();
   const dateApplied = (app.dateApplied == null ? '' : String(app.dateApplied)).trim();
+  const postingUrl = normalizePostingUrl(app.postingUrl);
 
   if (!company) {
     throw new Error('Company is required.');
@@ -78,12 +105,16 @@ export function validateApplication(
   if (!isValidDate(dateApplied)) {
     throw new Error('Date Applied must be a valid date in YYYY-MM-DD format.');
   }
+  if (!isValidHttpUrl(postingUrl)) {
+    throw new Error('Posting URL must be a valid http or https URL.');
+  }
 
   return {
     company,
     title,
     dateApplied,
-    receivedOffer: toBoolean(app.receivedOffer)
+    receivedOffer: toBoolean(app.receivedOffer),
+    postingUrl
   };
 }
 
