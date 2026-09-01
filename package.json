@@ -1,26 +1,16 @@
 {
   "name": "job-tracker",
   "version": "1.0.0",
+  "description": "A private Google Apps Script web app that records job applications to a bound Google Sheet.",
   "private": true,
-  "description": "Track your job applications from Applied to Offer.",
-  "workspaces": [
-    "server",
-    "client"
-  ],
+  "type": "module",
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:server": "npm run dev --workspace server",
-    "dev:client": "npm run dev --workspace client",
-    "build": "npm run build --workspace server && npm run build --workspace client",
-    "start": "npm run start --workspace server",
-    "lint": "npm run lint --workspace server && npm run lint --workspace client",
-    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace client",
-    "test": "npm run test --workspace server"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "push": "clasp push"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
-  },
-  "engines": {
-    "node": ">=20"
+    "@google/clasp": "^2.5.0",
+    "vitest": "^2.1.9"
   }
 }
