@@ -1,7 +1,7 @@
 {
   "name": "job-tracker",
   "version": "2.0.0",
-  "description": "A private job-application tracker that runs entirely in the browser. No Google Sheet, no backend.",
+  "description": "Job application tracker with Supabase Auth and a private Postgres table per account.",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

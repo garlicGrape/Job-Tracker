@@ -108,7 +108,8 @@ label {
 
 input[type="text"],
 input[type="date"],
-input[type="password"] {
+input[type="password"],
+input[type="email"] {
   border: 1px solid var(--slate-200);
   border-radius: 9px;
   padding: 9px 11px;
@@ -120,7 +121,8 @@ input[type="password"] {
 
 input[type="text"]:focus,
 input[type="date"]:focus,
-input[type="password"]:focus {
+input[type="password"]:focus,
+input[type="email"]:focus {
   border-color: var(--indigo);
   box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
@@ -339,8 +341,31 @@ td:last-child {
   grid-column: 1 / -1;
 }
 
-.reset-vault {
-  margin-top: 16px;
+.auth-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.auth-tab {
+  background: #fff;
+  color: var(--slate-500);
+  border: 1px solid var(--slate-200);
+  border-radius: 9px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.auth-tab.is-active {
+  color: var(--indigo);
+  border-color: var(--indigo);
+}
+
+.lock-screen code {
+  font-size: 12px;
 }
 
 @media (max-width: 600px) {
