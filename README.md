@@ -80,12 +80,19 @@ still there.
 
 ### GitHub Pages without putting keys in git
 
-1. Repo **Settings → Secrets and variables → Actions**: add `SUPABASE_URL` and
-   `SUPABASE_PUBLISHABLE_KEY`.
-2. **Settings → Pages**: source **GitHub Actions**.
-3. The `pages` workflow builds the app and writes `config.json` at deploy time.
+1. Repo **Settings → Secrets and variables → Actions → New repository secret**.
+   Names must match exactly:
+   - `SUPABASE_URL` = `https://YOUR_PROJECT.supabase.co`
+   - `SUPABASE_PUBLISHABLE_KEY` = `sb_publishable_...`
+2. Also add the same two names under **Settings → Environments → github-pages**
+   (the Pages job uses that environment; repo secrets alone are sometimes empty there).
+3. **Settings → Pages**: source **GitHub Actions**.
+4. **Actions → pages → Run workflow** (the last deploy skipped config because the
+   secrets were blank, and still showed a green check).
 
-The committed `docs/` folder stays key-free so CI can check it.
+The committed `docs/` folder stays key-free so CI can check it. After a good
+pages run, `https://garlicgrape.github.io/Job-Tracker/config.json` should exist
+(it is a 404 until secrets are picked up).
 
 ## Stack
 
@@ -105,6 +112,7 @@ The committed `docs/` folder stays key-free so CI can check it.
 src/App.tsx                   # UI (the surface Lovable can restyle)
 src/lib/applications.ts       # validation, dates, formula escaping
 src/lib/supabase-account.ts   # Auth + Postgres adapter
+src/lib/supabase-config.ts    # publishable key only; runtime config.json
 src/lib/store.ts              # in-memory helpers for tests
 src/lib/csv.ts                # CSV export / import
 supabase/schema.sql           # table + RLS (run in the SQL editor)
