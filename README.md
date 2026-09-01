@@ -1,8 +1,9 @@
 # Job Tracker
 
 A private, **static** web app that records job applications in your browser.
-Four fields — **Company**, **Title**, **Date Applied**, **Received Offer** — a
-form, a table, and a button to export (or import) the list as CSV.
+Five fields — **Company**, **Title**, **Date Applied**, **Received Offer**,
+**Posting URL** — a form, a table, and a button to export (or import) the list
+as CSV.
 
 Nothing to host beyond a static site, no API keys, no Google Sheet, no backend
 to keep alive. Data lives in `localStorage` on the machine and browser you use;
@@ -20,13 +21,17 @@ Browser
 
 1. **Add** — the form validates company, title, and a real `YYYY-MM-DD` date,
    then appends a record to `localStorage` under `job-tracker.applications`.
+   Posting URL is optional; if you paste a hostname without `https://`, the
+   app adds it.
 2. **List** — on load, the table is rendered from that same key.
-3. **Offer checkbox** — updates only that record’s `receivedOffer` flag.
-4. **Export CSV** — downloads `job-applications-YYYY-MM-DD.csv`. Values that
+3. **Edit** — **Edit** on a row loads that application into the form. Save
+   writes over the same record; Cancel discards the draft.
+4. **Offer checkbox** — updates only that record’s `receivedOffer` flag.
+5. **Export CSV** — downloads `job-applications-YYYY-MM-DD.csv`. Values that
    look like spreadsheet formulas (`=`, `+`, `-`, `@`) are prefixed with `'`
    so Excel / Sheets will not execute them.
-5. **Import CSV** — appends rows from a CSV with the same four headers (including
-   a File → Download → CSV export of the old Google Sheet).
+6. **Import CSV** — appends rows from a CSV with the same headers (including
+   a File → Download → CSV export of the old four-column Google Sheet).
 
 There is no server-side database. Clearing site data, switching browsers, or
 opening the app on another device starts from an empty list unless you import

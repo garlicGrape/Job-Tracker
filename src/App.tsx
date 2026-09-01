@@ -3,7 +3,8 @@ import {
   addApplication,
   getApplications,
   replaceApplications,
-  setOffer
+  setOffer,
+  updateApplication
 } from './lib/store';
 import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv';
 import type { Application } from './lib/types';
@@ -15,6 +16,10 @@ function todayIsoDate(): string {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
+function isSafeHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
 export default function App() {
   const storage = useMemo(() => window.localStorage, []);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -22,33 +27,47 @@ export default function App() {
   const [title, setTitle] = useState('');
   const [dateApplied, setDateApplied] = useState(todayIsoDate);
   const [receivedOffer, setReceivedOffer] = useState(false);
+  const [postingUrl, setPostingUrl] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; kind: 'error' | 'success' | '' }>({
     text: '',
     kind: ''
   });
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     setApplications(getApplications(storage));
   }, [storage]);
 
+  function resetForm() {
+    setCompany('');
+    setTitle('');
+    setDateApplied(todayIsoDate());
+    setReceivedOffer(false);
+    setPostingUrl('');
+    setEditingId(null);
+  }
+
   function onSubmit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
-      const next = addApplication(storage, {
+      const payload = {
         company,
         title,
         dateApplied,
-        receivedOffer
-      });
+        receivedOffer,
+        postingUrl
+      };
+      const wasEditing = Boolean(editingId);
+      const next = editingId
+        ? updateApplication(storage, editingId, payload)
+        : addApplication(storage, payload);
       setApplications(next);
-      setCompany('');
-      setTitle('');
-      setDateApplied(todayIsoDate());
-      setReceivedOffer(false);
-      setMessage({ text: 'Saved.', kind: 'success' });
+      resetForm();
+      setMessage({ text: wasEditing ? 'Updated.' : 'Saved.', kind: 'success' });
     } catch (err) {
       setMessage({
         text: err instanceof Error ? err.message : 'Could not save.',
@@ -59,9 +78,28 @@ export default function App() {
     }
   }
 
+  function onEdit(app: Application) {
+    setEditingId(app.id);
+    setCompany(app.company);
+    setTitle(app.title);
+    setDateApplied(app.dateApplied);
+    setReceivedOffer(app.receivedOffer);
+    setPostingUrl(app.postingUrl);
+    setMessage({ text: '', kind: '' });
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function onCancelEdit() {
+    resetForm();
+    setMessage({ text: '', kind: '' });
+  }
+
   function onToggleOffer(id: string, checked: boolean) {
     try {
       setApplications(setOffer(storage, id, checked));
+      if (editingId === id) {
+        setReceivedOffer(checked);
+      }
     } catch (err) {
       setMessage({
         text: err instanceof Error ? err.message : 'Could not update offer.',
@@ -127,7 +165,10 @@ export default function App() {
       </header>
 
       <div className="card">
-        <form className="app-form" onSubmit={onSubmit}>
+        <form className="app-form" onSubmit={onSubmit} ref={formRef}>
+          {editingId ? (
+            <p className="editing-note">Editing an existing application. Save or cancel when you are done.</p>
+          ) : null}
           <div className="field">
             <label htmlFor="company">Company</label>
             <input
@@ -175,10 +216,27 @@ export default function App() {
               <label htmlFor="receivedOffer">Received offer</label>
             </div>
           </div>
+          <div className="field field-wide">
+            <label htmlFor="postingUrl">Posting URL</label>
+            <input
+              type="text"
+              id="postingUrl"
+              name="postingUrl"
+              inputMode="url"
+              placeholder="https://jobs.example.com/role"
+              value={postingUrl}
+              onChange={(e) => setPostingUrl(e.target.value)}
+            />
+          </div>
           <div className="actions">
             <span className={`msg${message.kind ? ' ' + message.kind : ''}`}>{message.text}</span>
+            {editingId ? (
+              <button type="button" className="secondary" onClick={onCancelEdit} disabled={busy}>
+                Cancel
+              </button>
+            ) : null}
             <button type="submit" className="primary" disabled={busy}>
-              Add application
+              {editingId ? 'Save changes' : 'Add application'}
             </button>
           </div>
         </form>
@@ -216,33 +274,58 @@ export default function App() {
       {applications.length === 0 ? (
         <div className="card empty">No applications yet. Add your first one above.</div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Company</th>
-              <th>Title</th>
-              <th>Date Applied</th>
-              <th>Offer</th>
-            </tr>
-          </thead>
-          <tbody>
-            {applications.map((app) => (
-              <tr key={app.id}>
-                <td>{app.company}</td>
-                <td>{app.title}</td>
-                <td>{app.dateApplied}</td>
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={app.receivedOffer}
-                    aria-label={`Received offer from ${app.company}`}
-                    onChange={(e) => onToggleOffer(app.id, e.target.checked)}
-                  />
-                </td>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Title</th>
+                <th>Date Applied</th>
+                <th>Offer</th>
+                <th>Posting</th>
+                <th>
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {applications.map((app) => (
+                <tr key={app.id} className={editingId === app.id ? 'is-editing' : undefined}>
+                  <td>{app.company}</td>
+                  <td>{app.title}</td>
+                  <td>{app.dateApplied}</td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={app.receivedOffer}
+                      aria-label={`Received offer from ${app.company}`}
+                      onChange={(e) => onToggleOffer(app.id, e.target.checked)}
+                    />
+                  </td>
+                  <td>
+                    {app.postingUrl && isSafeHttpUrl(app.postingUrl) ? (
+                      <a href={app.postingUrl} target="_blank" rel="noopener noreferrer">
+                        View posting
+                      </a>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="linkish"
+                      onClick={() => onEdit(app)}
+                      aria-label={`Edit ${app.company} ${app.title}`}
+                    >
+                      Edit
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

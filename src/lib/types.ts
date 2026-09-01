@@ -1,4 +1,10 @@
-export const HEADERS = ['Company', 'Title', 'Date Applied', 'Received Offer'] as const;
+export const HEADERS = [
+  'Company',
+  'Title',
+  'Date Applied',
+  'Received Offer',
+  'Posting URL'
+] as const;
 
 export const STORAGE_KEY = 'job-tracker.applications';
 
@@ -7,6 +13,7 @@ export type ApplicationInput = {
   title?: unknown;
   dateApplied?: unknown;
   receivedOffer?: unknown;
+  postingUrl?: unknown;
 };
 
 export type Application = {
@@ -15,4 +22,5 @@ export type Application = {
   title: string;
   dateApplied: string;
   receivedOffer: boolean;
+  postingUrl: string;
 };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addApplication, getApplications, setOffer } from '../src/lib/store';
+import { addApplication, getApplications, setOffer, updateApplication } from '../src/lib/store';
 import { createMemoryStorage, storedRows } from './harness';
 
 describe('reading applications', () => {
@@ -33,13 +33,15 @@ describe('reading applications', () => {
       company: 'Acme',
       title: 'Frontend',
       dateApplied: '2026-08-20',
-      receivedOffer: true
+      receivedOffer: true,
+      postingUrl: ''
     });
     expect(apps[1]).toMatchObject({
       company: 'Globex',
       title: 'Backend',
       dateApplied: '2026-08-25',
-      receivedOffer: false
+      receivedOffer: false,
+      postingUrl: ''
     });
     expect(apps[0].id).not.toBe(apps[1].id);
   });
@@ -96,3 +98,117 @@ describe('setOffer', () => {
     expect(() => setOffer(storage, '', true)).toThrow(/invalid application id/i);
   });
 });
+
+describe('updateApplication', () => {
+  it('replaces fields on the matching application and keeps the id', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-08-20',
+      receivedOffer: false
+    });
+    const next = updateApplication(storage, first.id, {
+      company: 'Acme Inc',
+      title: 'Senior Dev',
+      dateApplied: '2026-08-21',
+      receivedOffer: true,
+      postingUrl: 'https://jobs.acme.test/senior'
+    });
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({
+      id: first.id,
+      company: 'Acme Inc',
+      title: 'Senior Dev',
+      dateApplied: '2026-08-21',
+      receivedOffer: true,
+      postingUrl: 'https://jobs.acme.test/senior'
+    });
+  });
+
+  it('does not touch other applications', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-08-20'
+    });
+    addApplication(storage, {
+      company: 'Globex',
+      title: 'PM',
+      dateApplied: '2026-08-25'
+    });
+    updateApplication(storage, first.id, {
+      company: 'Acme',
+      title: 'Staff Dev',
+      dateApplied: '2026-08-20'
+    });
+    const apps = getApplications(storage);
+    expect(apps).toHaveLength(2);
+    expect(apps[0].title).toBe('Staff Dev');
+    expect(apps[1].title).toBe('PM');
+  });
+
+  it('rejects a missing id', () => {
+    const storage = createMemoryStorage();
+    addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-08-20' });
+    expect(() =>
+      updateApplication(storage, 'missing-id', {
+        company: 'Acme',
+        title: 'Dev',
+        dateApplied: '2026-08-20'
+      })
+    ).toThrow(/not found/i);
+    expect(() =>
+      updateApplication(storage, '', {
+        company: 'Acme',
+        title: 'Dev',
+        dateApplied: '2026-08-20'
+      })
+    ).toThrow(/invalid application id/i);
+  });
+
+  it('rejects invalid replacement fields without writing', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-08-20'
+    });
+    expect(() =>
+      updateApplication(storage, first.id, {
+        company: '',
+        title: 'Dev',
+        dateApplied: '2026-08-20'
+      })
+    ).toThrow(/company is required/i);
+    expect(getApplications(storage)[0].company).toBe('Acme');
+  });
+});
+
+describe('legacy records without postingUrl', () => {
+  it('loads four-field JSON and defaults postingUrl to empty', () => {
+    const storage = createMemoryStorage({
+      'job-tracker.applications': JSON.stringify([
+        {
+          id: 'legacy-1',
+          company: 'Acme',
+          title: 'Dev',
+          dateApplied: '2026-08-20',
+          receivedOffer: false
+        }
+      ])
+    });
+    expect(getApplications(storage)).toEqual([
+      {
+        id: 'legacy-1',
+        company: 'Acme',
+        title: 'Dev',
+        dateApplied: '2026-08-20',
+        receivedOffer: false,
+        postingUrl: ''
+      }
+    ]);
+  });
+});
+

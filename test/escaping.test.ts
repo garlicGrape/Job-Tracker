@@ -5,6 +5,18 @@ import { escapeFormula } from '../src/lib/applications';
 import { createMemoryStorage } from './harness';
 import type { Application } from '../src/lib/types';
 
+function sampleApp(overrides: Partial<Application> = {}): Application {
+  return {
+    id: '1',
+    company: 'Acme',
+    title: 'Dev',
+    dateApplied: '2026-08-20',
+    receivedOffer: false,
+    postingUrl: '',
+    ...overrides
+  };
+}
+
 describe('formula-injection escaping (CSV)', () => {
   const dangerous = ['=', '+', '-', '@'];
 
@@ -26,19 +38,21 @@ describe('formula-injection escaping (CSV)', () => {
   }
 
   it('escapes the title field too', () => {
-    const apps: Application[] = [
-      {
-        id: '1',
-        company: 'Acme',
-        title: '=HYPERLINK("http://evil","x")',
-        dateApplied: '2026-01-01',
-        receivedOffer: false
-      }
-    ];
-    const csv = applicationsToCsv(apps);
+    const csv = applicationsToCsv([
+      sampleApp({ title: '=HYPERLINK("http://evil","x")', dateApplied: '2026-01-01' })
+    ]);
     const dataLine = csv.trim().split(/\r?\n/)[1];
     const titleField = splitCsvLine(dataLine)[1];
     expect(titleField).toBe("'=HYPERLINK(\"http://evil\",\"x\")");
+  });
+
+  it('escapes the posting URL field too', () => {
+    const csv = applicationsToCsv([
+      sampleApp({ postingUrl: '=HYPERLINK("http://evil","x")', dateApplied: '2026-01-01' })
+    ]);
+    const dataLine = csv.trim().split(/\r?\n/)[1];
+    const urlField = splitCsvLine(dataLine)[4];
+    expect(urlField).toBe("'=HYPERLINK(\"http://evil\",\"x\")");
   });
 
   it('leaves ordinary text untouched', () => {
@@ -59,32 +73,26 @@ describe('formula-injection escaping (CSV)', () => {
 
 describe('CSV round-trip', () => {
   it('exports a header row and one data row', () => {
-    const csv = applicationsToCsv([
-      {
-        id: '1',
-        company: 'Acme',
-        title: 'Dev',
-        dateApplied: '2026-08-20',
-        receivedOffer: true
-      }
-    ]);
+    const csv = applicationsToCsv([sampleApp({ receivedOffer: true })]);
     const lines = csv.trim().split(/\r?\n/);
-    expect(lines[0]).toBe('Company,Title,Date Applied,Received Offer');
-    expect(splitCsvLine(lines[1])).toEqual(['Acme', 'Dev', '2026-08-20', 'TRUE']);
+    expect(lines[0]).toBe('Company,Title,Date Applied,Received Offer,Posting URL');
+    expect(splitCsvLine(lines[1])).toEqual(['Acme', 'Dev', '2026-08-20', 'TRUE', '']);
   });
 
   it('quotes fields that contain commas', () => {
-    const csv = applicationsToCsv([
-      {
-        id: '1',
-        company: 'Acme, Inc.',
-        title: 'Dev',
-        dateApplied: '2026-08-20',
-        receivedOffer: false
-      }
-    ]);
+    const csv = applicationsToCsv([sampleApp({ company: 'Acme, Inc.' })]);
     const dataLine = csv.trim().split(/\r?\n/)[1];
     expect(splitCsvLine(dataLine)[0]).toBe('Acme, Inc.');
+  });
+
+  it('exports a posting URL and round-trips it', () => {
+    const csv = applicationsToCsv([
+      sampleApp({ postingUrl: 'https://jobs.example.com/dev' })
+    ]);
+    const lines = csv.trim().split(/\r?\n/);
+    expect(splitCsvLine(lines[1])[4]).toBe('https://jobs.example.com/dev');
+    const parsed = parseApplicationsCsv(csv);
+    expect(parsed[0].postingUrl).toBe('https://jobs.example.com/dev');
   });
 
   it('parses a Google Sheets-style export with the same headers', () => {
@@ -99,13 +107,36 @@ describe('CSV round-trip', () => {
       company: 'Acme',
       title: 'Frontend',
       dateApplied: '2026-08-20',
-      receivedOffer: true
+      receivedOffer: true,
+      postingUrl: ''
     });
     expect(apps[1].receivedOffer).toBe(false);
   });
 
+  it('parses a five-column export that includes posting URLs', () => {
+    const csv = [
+      'Company,Title,Date Applied,Received Offer,Posting URL',
+      'Acme,Frontend,2026-08-20,TRUE,https://jobs.acme.test/frontend'
+    ].join('\n');
+    const apps = parseApplicationsCsv(csv);
+    expect(apps).toHaveLength(1);
+    expect(apps[0].postingUrl).toBe('https://jobs.acme.test/frontend');
+  });
+
+  it('imports a row with an invalid posting URL and leaves the URL blank', () => {
+    const csv = [
+      'Company,Title,Date Applied,Received Offer,Posting URL',
+      'Acme,Frontend,2026-08-20,TRUE,javascript:alert(1)'
+    ].join('\n');
+    const apps = parseApplicationsCsv(csv);
+    expect(apps).toHaveLength(1);
+    expect(apps[0].postingUrl).toBe('');
+  });
+
   it('strips a leading apostrophe added for formula safety on import', () => {
-    const apps = parseApplicationsCsv("Company,Title,Date Applied,Received Offer\n'=1+1,Dev,2026-01-01,FALSE\n");
+    const apps = parseApplicationsCsv(
+      "Company,Title,Date Applied,Received Offer\n'=1+1,Dev,2026-01-01,FALSE\n"
+    );
     expect(apps[0].company).toBe('=1+1');
   });
 

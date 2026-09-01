@@ -1,12 +1,14 @@
 import { STORAGE_KEY, type Application, type ApplicationInput } from './types';
-import { createApplication, toBoolean } from './applications';
+import { createApplication, isValidHttpUrl, toBoolean } from './applications';
 
 export type KeyValueStorage = {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 };
 
-function isApplicationRecord(value: unknown): value is Application {
+type StoredApplication = Omit<Application, 'postingUrl'> & { postingUrl?: string };
+
+function isApplicationRecord(value: unknown): value is StoredApplication {
   if (!value || typeof value !== 'object') return false;
   const rec = value as Record<string, unknown>;
   return (
@@ -14,8 +16,17 @@ function isApplicationRecord(value: unknown): value is Application {
     typeof rec.company === 'string' &&
     typeof rec.title === 'string' &&
     typeof rec.dateApplied === 'string' &&
-    typeof rec.receivedOffer === 'boolean'
+    typeof rec.receivedOffer === 'boolean' &&
+    (rec.postingUrl === undefined || typeof rec.postingUrl === 'string')
   );
+}
+
+function withPostingUrl(app: StoredApplication): Application {
+  const postingUrl = app.postingUrl ?? '';
+  return {
+    ...app,
+    postingUrl: isValidHttpUrl(postingUrl) ? postingUrl : ''
+  };
 }
 
 export function getApplications(storage: KeyValueStorage): Application[] {
@@ -24,7 +35,7 @@ export function getApplications(storage: KeyValueStorage): Application[] {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isApplicationRecord);
+    return parsed.filter(isApplicationRecord).map(withPostingUrl);
   } catch {
     return [];
   }
@@ -43,6 +54,27 @@ export function addApplication(
   app: ApplicationInput
 ): Application[] {
   const next = [...getApplications(storage), createApplication(app)];
+  return persist(storage, next);
+}
+
+/**
+ * Replace the fields of an existing application, keeping its id.
+ */
+export function updateApplication(
+  storage: KeyValueStorage,
+  id: string,
+  app: ApplicationInput
+): Application[] {
+  if (!id || typeof id !== 'string') {
+    throw new Error('Invalid application id.');
+  }
+  const apps = getApplications(storage);
+  const idx = apps.findIndex((a) => a.id === id);
+  if (idx < 0) {
+    throw new Error('Application not found.');
+  }
+  const updated = createApplication(app, id);
+  const next = apps.map((a, i) => (i === idx ? updated : a));
   return persist(storage, next);
 }
 
