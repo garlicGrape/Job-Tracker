@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { createAccountApiFromConfig, type AccountApi, type PublicUser } from './lib/supabase-account';
 import { loadSupabaseConfig } from './lib/supabase-config';
 import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv';
+import { LIMITS, assertCsvByteSize } from './lib/applications';
 import type { Application } from './lib/types';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -264,6 +265,15 @@ export default function App() {
   }
 
   function onImportFile(file: File) {
+    try {
+      assertCsvByteSize(file.size);
+    } catch (err) {
+      setMessage({
+        text: err instanceof Error ? err.message : 'Could not import CSV.',
+        kind: 'error'
+      });
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       void (async () => {
@@ -379,7 +389,9 @@ export default function App() {
             <h2>{mode === 'signup' ? 'Create your account' : 'Welcome back'}</h2>
             <p className="privacy-note">
               Job listings are stored in your Supabase database, scoped to this email. Other accounts
-              cannot read them. Export CSV anytime as a personal backup.
+              cannot read them. Each account can keep up to {LIMITS.maxApplicationsPerUser} listings
+              — enough for a heavy search — and oversized or malformed rows are rejected even if
+              someone bypasses this form. Export CSV anytime as a personal backup.
             </p>
             <form className="lock-form" onSubmit={(event) => void onAuth(event)}>
               <div className="field">
@@ -438,7 +450,10 @@ export default function App() {
           <>
             <div className="stats" aria-label="Application summary">
               <div className="stat">
-                <span className="stat-value">{applications.length}</span>
+                <span className="stat-value">
+                  {applications.length}
+                  <span className="stat-cap">/{LIMITS.maxApplicationsPerUser}</span>
+                </span>
                 <span className="stat-label">{applications.length === 1 ? 'Application' : 'Applications'}</span>
               </div>
               <div className="stat">
@@ -469,6 +484,7 @@ export default function App() {
                     name="company"
                     placeholder="Acme Corp"
                     required
+                    maxLength={LIMITS.maxCompanyLength}
                     value={company}
                     onChange={(e) => setCompany(e.target.value)}
                   />
@@ -481,6 +497,7 @@ export default function App() {
                     name="title"
                     placeholder="Senior Engineer"
                     required
+                    maxLength={LIMITS.maxTitleLength}
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                   />
@@ -516,6 +533,7 @@ export default function App() {
                     name="postingUrl"
                     inputMode="url"
                     placeholder="https://jobs.example.com/role"
+                    maxLength={LIMITS.maxPostingUrlLength}
                     value={postingUrl}
                     onChange={(e) => setPostingUrl(e.target.value)}
                   />
@@ -542,7 +560,7 @@ export default function App() {
                 <p className="section-lede">
                   {applications.length === 0
                     ? 'Nothing here yet.'
-                    : `${applications.length} saved · edit or delete any row`}
+                    : `${applications.length} of ${LIMITS.maxApplicationsPerUser} saved · edit or delete any row`}
                 </p>
               </div>
               <div className="toolbar">

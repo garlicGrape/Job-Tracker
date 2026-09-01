@@ -1,5 +1,5 @@
 import { STORAGE_KEY, type Application, type ApplicationInput } from './types';
-import { createApplication, isValidHttpUrl, toBoolean } from './applications';
+import { assertApplicationQuota, createApplication, isValidHttpUrl, toBoolean } from './applications';
 
 export type KeyValueStorage = {
   getItem(key: string): string | null;
@@ -54,6 +54,7 @@ export function addApplication(
   app: ApplicationInput
 ): Application[] {
   const next = [...getApplications(storage), createApplication(app)];
+  assertApplicationQuota(next.length);
   return persist(storage, next);
 }
 
@@ -125,5 +126,6 @@ export function replaceApplications(
   storage: KeyValueStorage,
   apps: Application[]
 ): Application[] {
+  assertApplicationQuota(apps.length);
   return persist(storage, apps);
 }

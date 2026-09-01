@@ -7,12 +7,12 @@ export, not the database. It is not a Google Apps Script project.
 ## What this project is
 
 - `src/App.tsx` — the UI (sign in / sign up + form). Vanilla React.
-- `src/lib/applications.ts` — validation, date checks, ids, formula escaping.
+- `src/lib/applications.ts` — validation, dates, formula escaping, abuse limits.
 - `src/lib/supabase-account.ts` — injected Supabase client; Auth + `applications`.
 - `src/lib/supabase-config.ts` — publishable-key parsing; runtime `config.json`.
 - `src/lib/store.ts` — `{ getItem, setItem }` helpers used by unit tests.
 - `src/lib/csv.ts` — CSV export / import.
-- `supabase/schema.sql` — table + row-level security. Run in the SQL editor.
+- `supabase/schema.sql` — table, RLS, field CHECKs, per-account quota and write-rate triggers. Run in the SQL editor.
 - `test/*.test.ts` — Vitest suites that import `src/lib` directly.
 
 ## Hard constraints
