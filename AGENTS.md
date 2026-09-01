@@ -1,60 +1,47 @@
 # AGENTS.md
 
-Job Tracker is a **Google Apps Script** web app that records job applications to a
-bound Google Sheet. It is not a Node service. Read this before changing code.
+Job Tracker is a **static Vite + React** web app that records job applications
+in `localStorage` and can export them as CSV. It is not a Google Apps Script
+project and it is not a Node server. Read this before changing code.
 
 ## What this project is
 
-- `src/Code.gs` — the Apps Script (V8) backend. Plain JavaScript, one shared global scope.
-- `src/Index.html` — the UI, served by `HtmlService`. Vanilla JS, no framework.
-- `src/appsscript.json` — the Apps Script manifest.
-- `test/harness.js` — reads `Code.gs` as text and evaluates it with fake Google globals.
-- `test/*.test.js` — Vitest suites that run entirely offline.
+- `src/App.tsx` — the UI. Vanilla React, no component library.
+- `src/lib/applications.ts` — validation, date checks, ids, formula escaping.
+- `src/lib/store.ts` — persistence behind a `{ getItem, setItem }` interface.
+- `src/lib/csv.ts` — CSV export (and import for migrating from a sheet).
+- `test/*.test.ts` — Vitest suites that import `src/lib` directly.
 
 ## Hard constraints
 
-- **This is Apps Script, not Node.** No npm packages, no `import`/`require`, no build
-  step, and no `fetch` inside `src/Code.gs`. Use only Apps Script services
-  (`SpreadsheetApp`, `LockService`, `HtmlService`, `UrlFetchApp`, …) and standard JS.
-- **The client talks to the server only through `google.script.run`.** There is no REST API.
-- **Never edit `test/harness.js` to make a test pass.** Fix `src/Code.gs` instead.
-- **Every text value written to the sheet must pass through the formula-injection
-  escape** (`escapeFormula_`). A value starting with `=`, `+`, `-`, or `@` is otherwise
-  evaluated by Sheets. This is the single most common thing to forget — keep the test.
-- **Store dates as `YYYY-MM-DD` text, never `Date` objects.** Apps Script timezone
+- **No backend.** Do not add Express, Apps Script, or a database unless the
+  user explicitly asks for one. Persistence is `localStorage`; portability is CSV.
+- **Keep `src/lib` framework-free.** No React, no `window`, no `document` except
+  inside `downloadCsv`. Tests import these modules from Node.
+- **Every text value written to CSV must pass through `escapeFormula`.** A
+  value starting with `=`, `+`, `-`, or `@` is otherwise evaluated by Excel /
+  Sheets. Storage itself keeps the original string so the table stays readable.
+- **Store dates as `YYYY-MM-DD` text, never `Date` objects.** Timezone
   coercion will shift them by a day.
-- **Guard sheet writes with `LockService`.** A double-click can otherwise append twice
-  or read a stale last row.
+- **Never edit `test/harness.ts` to make a test pass.** Fix `src/lib` instead.
 - `npm test` is the gate. **Do not open a PR on red.**
 
 ## Commands
 
 ```bash
-npm ci      # install (also the environment install step)
-npm test    # run the Vitest suite — the gate
+npm ci            # install (also the environment install step)
+npm test          # Vitest suite — the gate
+npm run dev       # Vite dev server (http://localhost:5173)
+npm run build     # static output in dist/
 ```
-
-## Deploy (manual, local, not for agents)
-
-Deployment needs a Google account and `clasp` OAuth tokens on a real machine, so it
-happens locally and is out of scope for cloud agents:
-
-```bash
-npx clasp push   # push src/ to the bound Apps Script project
-```
-
-Then in the Apps Script editor: **Manage deployments → edit → Version: New version**.
-`.clasp.json` (script ID only) is committed; `.clasprc.json` (OAuth tokens) is gitignored
-and must never be committed.
 
 ## Cursor Cloud specific instructions
 
-- Cloud agents can run the full suite (`npm ci && npm test`) with no external services —
-  that is the whole point of the text-eval harness. There is no server to start, so
-  `.cursor/environment.json` has an `install` step and no `start`.
-- Agents **cannot** verify the deployed web app: whether it renders, whether Google
-  authorization succeeded, or whether the real `SpreadsheetApp` behaves as the fakes in
-  `test/harness.js` assume. Do not claim UI/deploy verification from a cloud run — leave
-  the click-through to a human after `clasp push`.
-- Reaching the real sheet would require personal Google credentials in Cursor's secret
-  store; do not add them for this project.
+- Cloud agents can run the full suite (`npm ci && npm test`) with no external
+  services. The optional `start` step in `.cursor/environment.json` runs Vite
+  so a human (or computer-use) can click through the UI.
+- Agents **can** verify the local Vite UI: add a row, toggle offer, export CSV,
+  import CSV. They **cannot** verify a published GitHub Pages / Lovable URL
+  unless that host is in this environment.
+- Do not add Google credentials, clasp tokens, or a bound spreadsheet. The
+  Google Sheet path is retired.
