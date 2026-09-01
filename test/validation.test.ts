@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { addApplication, getApplications, replaceApplications } from '../src/lib/store';
-import { assertCsvByteSize, LIMITS } from '../src/lib/applications';
+import { addApplication, getApplications } from '../src/lib/store';
+import { assertCsvByteSize, assertWriteBatchSize, LIMITS } from '../src/lib/applications';
 import { createMemoryStorage } from './harness';
 
 describe('validation', () => {
@@ -165,22 +165,25 @@ describe('validation', () => {
     ).toThrow(/at most 2048 characters/i);
   });
 
-  it('rejects replacing the list past the per-account cap', () => {
+  it('keeps accepting listings well past the old 500 ceiling', () => {
     const storage = createMemoryStorage();
-    const apps = Array.from({ length: LIMITS.maxApplicationsPerUser + 1 }, (_, i) => ({
-      id: 'id-' + i,
-      company: 'Acme',
-      title: 'Dev',
-      dateApplied: '2026-01-01',
-      receivedOffer: false,
-      postingUrl: ''
-    }));
-    expect(() => replaceApplications(storage, apps)).toThrow(/max 500/);
-    expect(getApplications(storage)).toHaveLength(0);
+    for (let i = 0; i < 750; i++) {
+      addApplication(storage, {
+        company: 'Acme ' + i,
+        title: 'Dev',
+        dateApplied: '2026-01-01'
+      });
+    }
+    expect(getApplications(storage)).toHaveLength(750);
+  });
+
+  it('rejects a single write larger than one statement allows', () => {
+    expect(() => assertWriteBatchSize(LIMITS.maxRowsPerWrite + 1)).toThrow(/in one write/i);
+    expect(() => assertWriteBatchSize(LIMITS.maxRowsPerWrite)).not.toThrow();
   });
 
   it('rejects an oversized CSV before it is parsed', () => {
-    expect(() => assertCsvByteSize(LIMITS.maxCsvBytes + 1)).toThrow(/512 kb/i);
+    expect(() => assertCsvByteSize(LIMITS.maxCsvBytes + 1)).toThrow(/5 MB/i);
     expect(() => assertCsvByteSize(LIMITS.maxCsvBytes)).not.toThrow();
   });
 });

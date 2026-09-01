@@ -7,6 +7,10 @@ import type { Application } from './lib/types';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Listings are unlimited, so the table renders in chunks rather than putting
+// thousands of rows in the DOM at once.
+const ROWS_PER_CHUNK = 250;
+
 function todayIsoDate(): string {
   const now = new Date();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -64,6 +68,7 @@ export default function App() {
   const [postingUrl, setPostingUrl] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(ROWS_PER_CHUNK);
   const [message, setMessage] = useState<{ text: string; kind: 'error' | 'success' | '' }>({
     text: '',
     kind: ''
@@ -286,7 +291,7 @@ export default function App() {
           if (!api) {
             throw new Error('Supabase is not configured.');
           }
-          const next = await api.replaceAll([...applications, ...imported]);
+          const next = await api.addMany(imported);
           setApplications(next);
           setMessage({
             text: `Imported ${imported.length} application${imported.length === 1 ? '' : 's'}.`,
@@ -305,6 +310,8 @@ export default function App() {
 
   const offerCount = applications.filter((app) => app.receivedOffer).length;
   const waitingCount = applications.length - offerCount;
+  const shown = Math.min(visibleCount, applications.length);
+  const visibleApplications = applications.slice(0, shown);
 
   return (
     <div className="page">
@@ -389,9 +396,9 @@ export default function App() {
             <h2>{mode === 'signup' ? 'Create your account' : 'Welcome back'}</h2>
             <p className="privacy-note">
               Job listings are stored in your Supabase database, scoped to this email. Other accounts
-              cannot read them. Each account can keep up to {LIMITS.maxApplicationsPerUser} listings
-              — enough for a heavy search — and oversized or malformed rows are rejected even if
-              someone bypasses this form. Export CSV anytime as a personal backup.
+              cannot read them. Keep as many listings as you like — there is no cap — while oversized
+              or malformed rows are still rejected even if someone bypasses this form. Export CSV
+              anytime as a personal backup.
             </p>
             <form className="lock-form" onSubmit={(event) => void onAuth(event)}>
               <div className="field">
@@ -450,10 +457,7 @@ export default function App() {
           <>
             <div className="stats" aria-label="Application summary">
               <div className="stat">
-                <span className="stat-value">
-                  {applications.length}
-                  <span className="stat-cap">/{LIMITS.maxApplicationsPerUser}</span>
-                </span>
+                <span className="stat-value">{applications.length}</span>
                 <span className="stat-label">{applications.length === 1 ? 'Application' : 'Applications'}</span>
               </div>
               <div className="stat">
@@ -560,7 +564,9 @@ export default function App() {
                 <p className="section-lede">
                   {applications.length === 0
                     ? 'Nothing here yet.'
-                    : `${applications.length} of ${LIMITS.maxApplicationsPerUser} saved · edit or delete any row`}
+                    : shown < applications.length
+                      ? `Showing ${shown} of ${applications.length} · edit or delete any row`
+                      : `${applications.length} saved · edit or delete any row`}
                 </p>
               </div>
               <div className="toolbar">
@@ -614,7 +620,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {applications.map((app) => (
+                    {visibleApplications.map((app) => (
                       <tr
                         key={app.id}
                         className={[
@@ -704,6 +710,17 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
+                {shown < applications.length ? (
+                  <div className="show-more">
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setVisibleCount((n) => n + ROWS_PER_CHUNK)}
+                    >
+                      Show {Math.min(ROWS_PER_CHUNK, applications.length - shown)} more
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
           </>

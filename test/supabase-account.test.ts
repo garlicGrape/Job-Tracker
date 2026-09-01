@@ -21,16 +21,7 @@ function createFakeSupabase() {
   const rows: ApplicationRow[] = [];
   let current: FakeUser | null = null;
   let idSeq = 0;
-  let insertStatements = 0;
-
-  function authUser() {
-    return current ? { id: current.id, email: current.email } : null;
-  }
-
-  function visible() {
-    if (!current) return [];
-    return rows.filter((r) => r.user_id === current!.id);
-  }
+  let rowsThisHour = 0;
 
   function constraintError(row: ApplicationRow): string | null {
     if (row.company.length < 1 || row.company.length > LIMITS.maxCompanyLength) {
@@ -61,7 +52,11 @@ function createFakeSupabase() {
     return rows.filter((r) => r.user_id === current!.id);
   }
 
-  function tryInsert(batch: ApplicationRow[], replaceOwn: boolean) {
+  /**
+   * Stands in for the applications_write_rate trigger: bounds rows per
+   * statement and rows per rolling hour. There is no total-row ceiling.
+   */
+  function tryInsert(batch: ApplicationRow[]) {
     if (!current) {
       return { data: null, error: { message: 'Sign in to continue.' } };
     }
@@ -74,29 +69,21 @@ function createFakeSupabase() {
         return { data: null, error: { message: constraint } };
       }
     }
-    const nextCount = replaceOwn ? batch.length : visible().length + batch.length;
-    if (nextCount > LIMITS.maxApplicationsPerUser) {
+    if (batch.length > LIMITS.maxRowsPerWrite) {
       return {
         data: null,
         error: {
-          message: `Too many listings (max ${LIMITS.maxApplicationsPerUser} per account). Delete some before adding more.`
+          message: `Too many listings in one write (max ${LIMITS.maxRowsPerWrite}). Split the import into smaller files.`
         }
       };
     }
-    if (batch.length > 0) {
-      if (insertStatements + 1 > LIMITS.maxWritesPerWindow) {
-        return {
-          data: null,
-          error: { message: 'Too many listing writes in a short time. Try again in a few minutes.' }
-        };
-      }
-      insertStatements += 1;
+    if (rowsThisHour + batch.length > LIMITS.maxRowsPerHour) {
+      return {
+        data: null,
+        error: { message: 'Too many listings added in the past hour. Try again later.' }
+      };
     }
-    if (replaceOwn) {
-      for (let i = rows.length - 1; i >= 0; i--) {
-        if (rows[i].user_id === current.id) rows.splice(i, 1);
-      }
-    }
+    rowsThisHour += batch.length;
     rows.push(...batch);
     return { data: null, error: null };
   }
@@ -106,7 +93,8 @@ function createFakeSupabase() {
       filters: Array<[string, string]>;
       action: 'select' | 'insert' | 'update' | 'delete';
       payload: unknown;
-    } = { filters: [], action: 'select', payload: null };
+      range: [number, number] | null;
+    } = { filters: [], action: 'select', payload: null, range: null };
 
     const builder = {
       select() {
@@ -132,6 +120,11 @@ function createFakeSupabase() {
         return builder;
       },
       order() {
+        return builder;
+      },
+      // PostgREST caps a single response, so reads are paged.
+      range(from: number, to: number) {
+        state.range = [from, to];
         return Promise.resolve(run());
       },
       then(resolve: (value: unknown) => unknown) {
@@ -145,7 +138,7 @@ function createFakeSupabase() {
       }
       if (state.action === 'insert') {
         const batch = Array.isArray(state.payload) ? state.payload : [state.payload];
-        return tryInsert(batch as ApplicationRow[], false);
+        return tryInsert(batch as ApplicationRow[]);
       }
       if (state.action === 'update') {
         const patch = state.payload as Partial<ApplicationRow>;
@@ -165,8 +158,14 @@ function createFakeSupabase() {
         }
         return { data: null, error: null };
       }
-      const data = visible().sort((a, b) => a.date_applied.localeCompare(b.date_applied));
-      return { data, error: null };
+      const sorted = visible().sort(
+        (a, b) => a.date_applied.localeCompare(b.date_applied) || a.id.localeCompare(b.id)
+      );
+      if (!state.range) {
+        return { data: sorted, error: null };
+      }
+      const [from, to] = state.range;
+      return { data: sorted.slice(from, to + 1), error: null };
     }
 
     return builder;
@@ -207,12 +206,6 @@ function createFakeSupabase() {
     },
     from(_table: string) {
       return from();
-    },
-    async rpc(fn: string, args: { p_rows?: ApplicationRow[] }) {
-      if (fn !== 'replace_own_applications') {
-        return { data: null, error: { message: 'Unknown rpc ' + fn } };
-      }
-      return tryInsert(args.p_rows ?? [], true);
     }
   };
 
@@ -319,61 +312,78 @@ describe('Supabase account API', () => {
     await expect(api.signIn('me@example.com', 'wrong-pass')).rejects.toThrow(/invalid login/i);
   });
 
-  it('rejects a CSV replace that would exceed the per-account listing cap', async () => {
+  it('keeps far more listings than the old 500 ceiling and reads every page', async () => {
     const api = createSupabaseAccountApi(createFakeSupabase());
     await api.signUp('me@example.com', 'correct-horse');
-    await api.add({ company: 'KeepMe', title: 'Dev', dateApplied: '2026-01-01' });
-    const tooMany = Array.from({ length: LIMITS.maxApplicationsPerUser + 1 }, (_, i) =>
-      createApplication({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01' }, `id-${i}`)
+    const many = Array.from({ length: 2400 }, (_, i) =>
+      createApplication(
+        {
+          company: 'Acme ' + String(i).padStart(4, '0'),
+          title: 'Dev',
+          dateApplied: '2026-01-01'
+        },
+        `id-${String(i).padStart(4, '0')}`
+      )
     );
-    await expect(api.replaceAll(tooMany)).rejects.toThrow(/max 500/);
-    expect(await api.list()).toEqual([expect.objectContaining({ company: 'KeepMe' })]);
+    const stored = await api.addMany(many);
+    // Larger than LIMITS.pageSize, so list() only returns this many if it
+    // walked past the first page.
+    expect(stored).toHaveLength(2400);
+    expect(stored[0].company).toBe('Acme 0000');
+    expect(stored[2399].company).toBe('Acme 2399');
+    expect(new Set(stored.map((a) => a.id)).size).toBe(2400);
   });
 
-  it('replaces listings in one shot without duplicating', async () => {
+  it('appends a CSV import instead of replacing what is already saved', async () => {
     const api = createSupabaseAccountApi(createFakeSupabase());
     await api.signUp('me@example.com', 'correct-horse');
     await api.add({ company: 'OldCo', title: 'Dev', dateApplied: '2026-01-01' });
     const imported = [
       createApplication({ company: 'NewCo', title: 'PM', dateApplied: '2026-02-01' }, 'id-new')
     ];
-    const list = await api.replaceAll(imported);
-    expect(list.map((a) => a.company)).toEqual(['NewCo']);
+    const list = await api.addMany(imported);
+    expect(list.map((a) => a.company)).toEqual(['OldCo', 'NewCo']);
   });
 
-  it('rejects adding past the per-account listing cap', async () => {
+  it('rejects a single write larger than the per-statement cap', async () => {
     const api = createSupabaseAccountApi(createFakeSupabase());
     await api.signUp('me@example.com', 'correct-horse');
-    const atCap = Array.from({ length: LIMITS.maxApplicationsPerUser }, (_, i) =>
-      createApplication({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01' }, `id-${i}`)
+    await api.add({ company: 'KeepMe', title: 'Dev', dateApplied: '2026-01-01' });
+    const huge = Array.from({ length: LIMITS.maxRowsPerWrite + 1 }, (_, i) =>
+      createApplication({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01' }, `big-${i}`)
     );
-    await api.replaceAll(atCap);
-    expect(await api.list()).toHaveLength(LIMITS.maxApplicationsPerUser);
-    await expect(
-      api.add({ company: 'Overflow', title: 'Dev', dateApplied: '2026-01-02' })
-    ).rejects.toThrow(/max 500/);
-    expect(await api.list()).toHaveLength(LIMITS.maxApplicationsPerUser);
+    await expect(api.addMany(huge)).rejects.toThrow(/in one write/i);
+    expect(await api.list()).toEqual([expect.objectContaining({ company: 'KeepMe' })]);
   });
 
-  it('rejects a burst of single-row writes past the rate window', async () => {
+  it('rejects writes past the hourly row budget without capping the total', async () => {
     const api = createSupabaseAccountApi(createFakeSupabase());
     await api.signUp('me@example.com', 'correct-horse');
-    for (let i = 0; i < LIMITS.maxWritesPerWindow; i++) {
-      await api.add({ company: 'Acme', title: 'Dev ' + i, dateApplied: '2026-01-01' });
+    const batches = LIMITS.maxRowsPerHour / LIMITS.maxRowsPerWrite;
+    for (let b = 0; b < batches; b++) {
+      const batch = Array.from({ length: LIMITS.maxRowsPerWrite }, (_, i) =>
+        createApplication(
+          { company: 'Acme', title: 'Dev', dateApplied: '2026-01-01' },
+          `b${b}-${i}`
+        )
+      );
+      await api.addMany(batch);
     }
     await expect(
-      api.add({ company: 'Acme', title: 'One more', dateApplied: '2026-01-01' })
-    ).rejects.toThrow(/too many listing writes/i);
-    expect(await api.list()).toHaveLength(LIMITS.maxWritesPerWindow);
+      api.add({ company: 'OverBudget', title: 'Dev', dateApplied: '2026-01-02' })
+    ).rejects.toThrow(/past hour/i);
   });
 
-  it('maps Postgres check-constraint text to the client validator messages', () => {
+  it('maps Postgres check-constraint and rate-limit text to client messages', () => {
     expect(mapDatabaseError('new row violates check constraint "applications_company_len"')).toMatch(
       /at most 200/
     );
-    expect(mapDatabaseError('Too many listing writes in a short time. Try again in a few minutes.')).toMatch(
-      /few minutes/
-    );
+    expect(
+      mapDatabaseError('Too many listings in one write (max 5000). Split the import into smaller files.')
+    ).toMatch(/in one write/);
+    expect(
+      mapDatabaseError('Too many listings added in the past hour. Try again later.')
+    ).toMatch(/past hour/);
     expect(mapDatabaseError('Auth session missing!')).toBe('Auth session missing!');
   });
 });

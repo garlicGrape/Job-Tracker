@@ -304,12 +304,10 @@ button.danger:hover:not(:disabled) {
   line-height: 1;
 }
 
-.stat-cap {
-  margin-left: 2px;
-  font-size: 14px;
-  font-weight: 650;
-  letter-spacing: 0;
-  color: var(--muted);
+.show-more {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 4px;
 }
 
 .stat-label {

@@ -8,11 +8,11 @@ export, not the database. It is not a Google Apps Script project.
 
 - `src/App.tsx` — the UI (sign in / sign up + form). Vanilla React.
 - `src/lib/applications.ts` — validation, dates, formula escaping, abuse limits.
-- `src/lib/supabase-account.ts` — injected Supabase client; Auth + `applications`.
+- `src/lib/supabase-account.ts` — injected Supabase client; Auth + `applications`. Reads are paged.
 - `src/lib/supabase-config.ts` — publishable-key parsing; runtime `config.json`.
 - `src/lib/store.ts` — `{ getItem, setItem }` helpers used by unit tests.
 - `src/lib/csv.ts` — CSV export / import.
-- `supabase/schema.sql` — table, RLS, field CHECKs, per-account quota and write-rate triggers. Run in the SQL editor.
+- `supabase/schema.sql` — table, RLS, field CHECKs, write-rate trigger. Run in the SQL editor.
 - `test/*.test.ts` — Vitest suites that import `src/lib` directly.
 
 ## Hard constraints
@@ -29,6 +29,11 @@ export, not the database. It is not a Google Apps Script project.
   Sheets. Storage itself keeps the original string so the table stays readable.
 - **Store dates as `YYYY-MM-DD` text, never `Date` objects.** The Postgres
   column is `text` (`date_applied`) for the same reason.
+- **Listings are unlimited. Do not reintroduce a per-account row cap.** Abuse is
+  bounded by row size (`CHECK`s) and write rate (5,000 rows per statement,
+  20,000 per hour), which hold at any table size. `LIMITS` in
+  `src/lib/applications.ts` and `supabase/schema.sql` must stay in sync, and
+  `list()` must stay paged.
 - **Never edit `test/harness.ts` to make a test pass.** Fix `src/lib` instead.
 - `npm test` is the gate. **Do not open a PR on red.** Tests must not need a
   live Supabase project (use a fake client).

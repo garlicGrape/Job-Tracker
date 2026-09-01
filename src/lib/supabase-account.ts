@@ -3,7 +3,7 @@
  * Framework-free: pass a Supabase client. Tests pass a fake client.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { assertApplicationQuota, createApplication, mapDatabaseError } from './applications';
+import { LIMITS, assertWriteBatchSize, createApplication, mapDatabaseError } from './applications';
 import type { Application, ApplicationInput } from './types';
 
 export type PublicUser = {
@@ -18,10 +18,10 @@ export type AccountApi = {
   restore(): Promise<PublicUser | null>;
   list(): Promise<Application[]>;
   add(input: ApplicationInput): Promise<Application[]>;
+  addMany(apps: Application[]): Promise<Application[]>;
   update(id: string, input: ApplicationInput): Promise<Application[]>;
   remove(id: string): Promise<Application[]>;
   setOffer(id: string, received: boolean): Promise<Application[]>;
-  replaceAll(apps: Application[]): Promise<Application[]>;
 };
 
 export type ApplicationRow = {
@@ -81,13 +81,30 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
     return { id: user.id, email: user.email };
   }
 
+  /**
+   * Read every listing for the signed-in account. PostgREST caps a single
+   * response, so an unlimited account has to be walked page by page. The
+   * secondary sort on id keeps page boundaries stable when many listings
+   * share a date.
+   */
   async function list(): Promise<Application[]> {
-    const { data, error } = await client
-      .from('applications')
-      .select('id,company,title,date_applied,received_offer,posting_url')
-      .order('date_applied', { ascending: true });
-    throwOn(error);
-    return (data ?? []).map((row) => fromRow(row as ApplicationRow));
+    const all: Application[] = [];
+    for (let from = 0; ; from += LIMITS.pageSize) {
+      const { data, error } = await client
+        .from('applications')
+        .select('id,company,title,date_applied,received_offer,posting_url')
+        .order('date_applied', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, from + LIMITS.pageSize - 1);
+      throwOn(error);
+      const page = (data ?? []) as ApplicationRow[];
+      for (const row of page) {
+        all.push(fromRow(row));
+      }
+      if (page.length < LIMITS.pageSize) {
+        return all;
+      }
+    }
   }
 
   return {
@@ -127,9 +144,23 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
     async add(input) {
       const user = await requireUser();
       const app = createApplication(input);
-      const existing = await list();
-      assertApplicationQuota(existing.length + 1);
       const { error } = await client.from('applications').insert(toRow(user.id, app));
+      throwOn(error);
+      return list();
+    },
+
+    /**
+     * Append a batch (CSV import). One statement, so it is one write against
+     * the rate limit and it never deletes anything the account already has.
+     */
+    async addMany(apps) {
+      const user = await requireUser();
+      assertWriteBatchSize(apps.length);
+      if (apps.length === 0) {
+        return list();
+      }
+      const rows = apps.map((app) => toRow(user.id, createApplication(app, app.id)));
+      const { error } = await client.from('applications').insert(rows);
       throwOn(error);
       return list();
     },
@@ -167,15 +198,6 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
         .from('applications')
         .update({ received_offer: received })
         .eq('id', id);
-      throwOn(error);
-      return list();
-    },
-
-    async replaceAll(apps) {
-      const user = await requireUser();
-      assertApplicationQuota(apps.length);
-      const rows = apps.map((app) => toRow(user.id, createApplication(app, app.id)));
-      const { error } = await client.rpc('replace_own_applications', { p_rows: rows });
       throwOn(error);
       return list();
     }
