@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { createAccountApiFromConfig, type AccountApi, type PublicUser } from './lib/supabase-account';
 import { loadSupabaseConfig } from './lib/supabase-config';
 import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv';
+import { LIMITS, assertCsvByteSize } from './lib/applications';
 import type { Application } from './lib/types';
 
 function todayIsoDate(): string {
@@ -203,6 +204,15 @@ export default function App() {
   }
 
   function onImportFile(file: File) {
+    try {
+      assertCsvByteSize(file.size);
+    } catch (err) {
+      setMessage({
+        text: err instanceof Error ? err.message : 'Could not import CSV.',
+        kind: 'error'
+      });
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       void (async () => {
@@ -318,7 +328,9 @@ export default function App() {
           <h2>{mode === 'signup' ? 'Create your account' : 'Sign in to your account'}</h2>
           <p className="privacy-note">
             Job listings are stored in your Supabase database, scoped to this email. Other
-            accounts cannot read them (row-level security). Export CSV anytime as a personal
+            accounts cannot read them (row-level security). Postgres also caps each account
+            at {LIMITS.maxApplicationsPerUser} listings and rejects oversized or malformed
+            rows, even if someone bypasses this form. Export CSV anytime as a personal
             backup. Ask Lovable to restyle this screen; leave <code>src/lib/</code> and{' '}
             <code>supabase/schema.sql</code> alone.
           </p>
@@ -388,6 +400,7 @@ export default function App() {
                   name="company"
                   placeholder="Acme Corp"
                   required
+                  maxLength={LIMITS.maxCompanyLength}
                   value={company}
                   onChange={(e) => setCompany(e.target.value)}
                 />
@@ -400,6 +413,7 @@ export default function App() {
                   name="title"
                   placeholder="Senior Engineer"
                   required
+                  maxLength={LIMITS.maxTitleLength}
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                 />
@@ -435,6 +449,7 @@ export default function App() {
                   name="postingUrl"
                   inputMode="url"
                   placeholder="https://jobs.example.com/role"
+                  maxLength={LIMITS.maxPostingUrlLength}
                   value={postingUrl}
                   onChange={(e) => setPostingUrl(e.target.value)}
                 />
@@ -454,7 +469,7 @@ export default function App() {
           </div>
 
           <div className="section-head">
-            <h2>Your applications</h2>
+            <h2>Your applications ({applications.length}/{LIMITS.maxApplicationsPerUser})</h2>
             <div className="toolbar">
               <input
                 ref={fileRef}

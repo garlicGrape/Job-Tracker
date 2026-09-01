@@ -11,6 +11,7 @@ import {
   parsePublicConfig,
   parseSupabaseUrl
 } from '../src/lib/supabase-config';
+import { createApplication, LIMITS, mapDatabaseError } from '../src/lib/applications';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 type FakeUser = { id: string; email: string; password: string };
@@ -20,6 +21,7 @@ function createFakeSupabase() {
   const rows: ApplicationRow[] = [];
   let current: FakeUser | null = null;
   let idSeq = 0;
+  let insertStatements = 0;
 
   function authUser() {
     return current ? { id: current.id, email: current.email } : null;
@@ -28,6 +30,75 @@ function createFakeSupabase() {
   function visible() {
     if (!current) return [];
     return rows.filter((r) => r.user_id === current!.id);
+  }
+
+  function constraintError(row: ApplicationRow): string | null {
+    if (row.company.length < 1 || row.company.length > LIMITS.maxCompanyLength) {
+      return 'new row for relation "applications" violates check constraint "applications_company_len"';
+    }
+    if (row.title.length < 1 || row.title.length > LIMITS.maxTitleLength) {
+      return 'new row for relation "applications" violates check constraint "applications_title_len"';
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date_applied)) {
+      return 'new row for relation "applications" violates check constraint "applications_date_applied_fmt"';
+    }
+    const url = row.posting_url ?? '';
+    if (url.length > LIMITS.maxPostingUrlLength) {
+      return 'new row for relation "applications" violates check constraint "applications_posting_url_len"';
+    }
+    if (url !== '' && !/^https?:\/\//i.test(url)) {
+      return 'new row for relation "applications" violates check constraint "applications_posting_url_http"';
+    }
+    return null;
+  }
+
+  function authUser() {
+    return current ? { id: current.id, email: current.email } : null;
+  }
+
+  function visible() {
+    if (!current) return [];
+    return rows.filter((r) => r.user_id === current!.id);
+  }
+
+  function tryInsert(batch: ApplicationRow[], replaceOwn: boolean) {
+    if (!current) {
+      return { data: null, error: { message: 'Sign in to continue.' } };
+    }
+    for (const row of batch) {
+      if (row.user_id !== current.id) {
+        return { data: null, error: { message: 'row-level security violation' } };
+      }
+      const constraint = constraintError(row);
+      if (constraint) {
+        return { data: null, error: { message: constraint } };
+      }
+    }
+    const nextCount = replaceOwn ? batch.length : visible().length + batch.length;
+    if (nextCount > LIMITS.maxApplicationsPerUser) {
+      return {
+        data: null,
+        error: {
+          message: `Too many listings (max ${LIMITS.maxApplicationsPerUser} per account). Delete some before adding more.`
+        }
+      };
+    }
+    if (batch.length > 0) {
+      if (insertStatements + 1 > LIMITS.maxWritesPerWindow) {
+        return {
+          data: null,
+          error: { message: 'Too many listing writes in a short time. Try again in a few minutes.' }
+        };
+      }
+      insertStatements += 1;
+    }
+    if (replaceOwn) {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].user_id === current.id) rows.splice(i, 1);
+      }
+    }
+    rows.push(...batch);
+    return { data: null, error: null };
   }
 
   const from = () => {
@@ -74,13 +145,7 @@ function createFakeSupabase() {
       }
       if (state.action === 'insert') {
         const batch = Array.isArray(state.payload) ? state.payload : [state.payload];
-        for (const row of batch as ApplicationRow[]) {
-          if (row.user_id !== current!.id) {
-            return { data: null, error: { message: 'row-level security violation' } };
-          }
-          rows.push(row);
-        }
-        return { data: null, error: null };
+        return tryInsert(batch as ApplicationRow[], false);
       }
       if (state.action === 'update') {
         const patch = state.payload as Partial<ApplicationRow>;
@@ -142,6 +207,12 @@ function createFakeSupabase() {
     },
     from(_table: string) {
       return from();
+    },
+    async rpc(fn: string, args: { p_rows?: ApplicationRow[] }) {
+      if (fn !== 'replace_own_applications') {
+        return { data: null, error: { message: 'Unknown rpc ' + fn } };
+      }
+      return tryInsert(args.p_rows ?? [], true);
     }
   };
 
@@ -210,6 +281,64 @@ describe('Supabase account API', () => {
     await api.signUp('me@example.com', 'correct-horse');
     await api.signOut();
     await expect(api.signIn('me@example.com', 'wrong-pass')).rejects.toThrow(/invalid login/i);
+  });
+
+  it('rejects a CSV replace that would exceed the per-account listing cap', async () => {
+    const api = createSupabaseAccountApi(createFakeSupabase());
+    await api.signUp('me@example.com', 'correct-horse');
+    await api.add({ company: 'KeepMe', title: 'Dev', dateApplied: '2026-01-01' });
+    const tooMany = Array.from({ length: LIMITS.maxApplicationsPerUser + 1 }, (_, i) =>
+      createApplication({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01' }, `id-${i}`)
+    );
+    await expect(api.replaceAll(tooMany)).rejects.toThrow(/max 500/);
+    expect(await api.list()).toEqual([expect.objectContaining({ company: 'KeepMe' })]);
+  });
+
+  it('replaces listings in one shot without duplicating', async () => {
+    const api = createSupabaseAccountApi(createFakeSupabase());
+    await api.signUp('me@example.com', 'correct-horse');
+    await api.add({ company: 'OldCo', title: 'Dev', dateApplied: '2026-01-01' });
+    const imported = [
+      createApplication({ company: 'NewCo', title: 'PM', dateApplied: '2026-02-01' }, 'id-new')
+    ];
+    const list = await api.replaceAll(imported);
+    expect(list.map((a) => a.company)).toEqual(['NewCo']);
+  });
+
+  it('rejects adding past the per-account listing cap', async () => {
+    const api = createSupabaseAccountApi(createFakeSupabase());
+    await api.signUp('me@example.com', 'correct-horse');
+    const atCap = Array.from({ length: LIMITS.maxApplicationsPerUser }, (_, i) =>
+      createApplication({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01' }, `id-${i}`)
+    );
+    await api.replaceAll(atCap);
+    expect(await api.list()).toHaveLength(LIMITS.maxApplicationsPerUser);
+    await expect(
+      api.add({ company: 'Overflow', title: 'Dev', dateApplied: '2026-01-02' })
+    ).rejects.toThrow(/max 500/);
+    expect(await api.list()).toHaveLength(LIMITS.maxApplicationsPerUser);
+  });
+
+  it('rejects a burst of single-row writes past the rate window', async () => {
+    const api = createSupabaseAccountApi(createFakeSupabase());
+    await api.signUp('me@example.com', 'correct-horse');
+    for (let i = 0; i < LIMITS.maxWritesPerWindow; i++) {
+      await api.add({ company: 'Acme', title: 'Dev ' + i, dateApplied: '2026-01-01' });
+    }
+    await expect(
+      api.add({ company: 'Acme', title: 'One more', dateApplied: '2026-01-01' })
+    ).rejects.toThrow(/too many listing writes/i);
+    expect(await api.list()).toHaveLength(LIMITS.maxWritesPerWindow);
+  });
+
+  it('maps Postgres check-constraint text to the client validator messages', () => {
+    expect(mapDatabaseError('new row violates check constraint "applications_company_len"')).toMatch(
+      /at most 200/
+    );
+    expect(mapDatabaseError('Too many listing writes in a short time. Try again in a few minutes.')).toMatch(
+      /few minutes/
+    );
+    expect(mapDatabaseError('Auth session missing!')).toBe('Auth session missing!');
   });
 });
 

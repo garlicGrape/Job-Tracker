@@ -8,6 +8,21 @@
 import type { Application, ApplicationInput } from './types';
 
 /**
+ * Abuse / integrity limits. Postgres CHECKs and triggers in
+ * supabase/schema.sql use the same numbers so a direct API call cannot
+ * skip them. Keep the SQL file in sync when changing these.
+ */
+export const LIMITS = {
+  maxCompanyLength: 200,
+  maxTitleLength: 200,
+  maxPostingUrlLength: 2048,
+  maxApplicationsPerUser: 500,
+  maxWritesPerWindow: 30,
+  writeWindowMinutes: 10,
+  maxCsvBytes: 512 * 1024
+} as const;
+
+/**
  * Coerce an arbitrary truthy/checkbox value into a real boolean.
  */
 export function toBoolean(value: unknown): boolean {
@@ -102,8 +117,17 @@ export function validateApplication(
   if (!title) {
     throw new Error('Title is required.');
   }
+  if (company.length > LIMITS.maxCompanyLength) {
+    throw new Error(`Company must be at most ${LIMITS.maxCompanyLength} characters.`);
+  }
+  if (title.length > LIMITS.maxTitleLength) {
+    throw new Error(`Title must be at most ${LIMITS.maxTitleLength} characters.`);
+  }
   if (!isValidDate(dateApplied)) {
     throw new Error('Date Applied must be a valid date in YYYY-MM-DD format.');
+  }
+  if (postingUrl.length > LIMITS.maxPostingUrlLength) {
+    throw new Error(`Posting URL must be at most ${LIMITS.maxPostingUrlLength} characters.`);
   }
   if (!isValidHttpUrl(postingUrl)) {
     throw new Error('Posting URL must be a valid http or https URL.');
@@ -130,4 +154,51 @@ export function createApplication(
   id: string = createId()
 ): Application {
   return { id, ...validateApplication(app) };
+}
+
+/**
+ * Reject a write that would take an account past the listing cap.
+ */
+export function assertApplicationQuota(nextCount: number): void {
+  if (nextCount > LIMITS.maxApplicationsPerUser) {
+    throw new Error(
+      `Too many listings (max ${LIMITS.maxApplicationsPerUser} per account). Delete some before adding more.`
+    );
+  }
+}
+
+export function assertCsvByteSize(bytes: number): void {
+  if (bytes > LIMITS.maxCsvBytes) {
+    throw new Error('CSV file is too large (max 512 KB).');
+  }
+}
+
+/**
+ * Map Postgres / PostgREST constraint text to the same messages the
+ * client validator uses. Unknown messages pass through unchanged.
+ */
+export function mapDatabaseError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes('too many listings')) {
+    return `Too many listings (max ${LIMITS.maxApplicationsPerUser} per account). Delete some before adding more.`;
+  }
+  if (lower.includes('too many listing writes')) {
+    return 'Too many listing writes in a short time. Try again in a few minutes.';
+  }
+  if (lower.includes('applications_company_len')) {
+    return `Company must be at most ${LIMITS.maxCompanyLength} characters.`;
+  }
+  if (lower.includes('applications_title_len')) {
+    return `Title must be at most ${LIMITS.maxTitleLength} characters.`;
+  }
+  if (lower.includes('applications_date_applied_fmt')) {
+    return 'Date Applied must be a valid date in YYYY-MM-DD format.';
+  }
+  if (lower.includes('applications_posting_url')) {
+    return `Posting URL must be a valid http or https URL (max ${LIMITS.maxPostingUrlLength} characters).`;
+  }
+  if (lower.includes('check constraint')) {
+    return 'That listing is too large or in the wrong format.';
+  }
+  return message;
 }

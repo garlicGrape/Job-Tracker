@@ -17,9 +17,39 @@ not a Node server you have to keep alive.
 | Supabase Auth | Email / password accounts |
 | `public.applications` | Your rows (`user_id`, company, title, `date_applied` as `YYYY-MM-DD` text, offer flag, posting URL) |
 | Row-level security | `auth.uid() = user_id` on select/insert/update/delete. Account B cannot read account A. |
+| Abuse limits | Postgres CHECKs (field length, date shape, http(s) URLs), **500 listings per account**, and **30 inserts per 10 minutes** per account. Enforced in the database, not only the form. |
 | Publishable key | `sb_publishable_...` — low privilege, same as the old anon JWT. The browser needs *some* public identifier. **Secret** keys (`sb_secret_...`, `service_role`) never go in the app or git. |
 
 GitHub Pages and Lovable only serve the UI. They never see the table.
+
+### Abuse limits (spam / oversized rows)
+
+Anyone can read the publishable key from DevTools and call the Supabase REST API
+directly, so **limits live in Postgres**. Re-run [`supabase/schema.sql`](supabase/schema.sql)
+in the SQL editor after pulling this change. The UI shows the same errors.
+
+| Limit | Where it is enforced | Why |
+| ----- | -------------------- | --- |
+| Sign-in required | RLS: `to authenticated` | Anonymous traffic cannot insert. |
+| Own rows only | RLS: `auth.uid() = user_id` | Account B cannot write into account A. |
+| Company / title ≤ 200 chars | `CHECK` + `validateApplication` | Stops multi-megabyte strings. |
+| Posting URL ≤ 2048 chars, `http(s)` only | `CHECK` + `validateApplication` | Stops junk protocols and huge URLs. |
+| Date `YYYY-MM-DD` | `CHECK` + calendar check in JS | Stops garbage in the text date column. |
+| 500 listings per account | `AFTER INSERT` trigger (statement-level) + `replace_own_applications` RPC | Caps table growth even on a bulk CSV import. |
+| 30 insert **statements** / 10 minutes | write-log trigger | A form spam loop is many statements; one CSV import is one statement. |
+| CSV import is one transaction | `replace_own_applications` RPC | Delete + insert roll back together, so a rejected import cannot wipe existing rows. |
+| CSV file ≤ 512 KB | UI, before `FileReader` | Avoids loading a huge file in the browser. |
+
+Client checks are for a clear error message. Skipping them (curl, a script) still
+hits the same Postgres constraints.
+
+**Sign-up spam** (many accounts, then one listing each) is Auth, not this table.
+In the Supabase dashboard: **Authentication → Rate Limits**, and optionally
+**Authentication → Attack Protection** (CAPTCHA). This app cannot add a secret
+CAPTCHA key; that setting stays in your project.
+
+The free-tier database size and the 500-row cap are what prevent “crash the
+database.” Postgres will not fall over from 500 short rows.
 
 ### Why a key in the browser is not a “database password”
 
@@ -43,7 +73,7 @@ builds do **not** inline keys; the app loads `config.json` at runtime.
 ```
 Browser
   ├── React UI (src/App.tsx)                     ← sign in / sign up + form (Lovable)
-  ├── Domain logic (src/lib/applications.ts)     ← validation, dates, ids
+  ├── Domain logic (src/lib/applications.ts)     ← validation, dates, ids, limits
   ├── Supabase adapter (src/lib/supabase-account.ts)
   ├── Store helpers (src/lib/store.ts)           ← used by tests / CSV shape
   └── CSV (src/lib/csv.ts)                       ← export + import
@@ -62,7 +92,9 @@ still there.
 ## Set up Supabase (once)
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. SQL editor: paste and run [`supabase/schema.sql`](supabase/schema.sql).
+2. SQL editor: paste and run [`supabase/schema.sql`](supabase/schema.sql). If you
+   already ran an older copy, run it again — it adds CHECKs and quota triggers
+   without dropping your rows.
 3. Authentication → Providers → Email: turn **off** “Confirm email” if you want
    to sign in immediately on a personal app.
 4. **Settings → API Keys** (not the legacy JWT tab). If you only see *anon* /
@@ -110,12 +142,12 @@ pages run, `https://garlicgrape.github.io/Job-Tracker/config.json` should exist
 
 ```
 src/App.tsx                   # UI (the surface Lovable can restyle)
-src/lib/applications.ts       # validation, dates, formula escaping
+src/lib/applications.ts       # validation, dates, formula escaping, limits
 src/lib/supabase-account.ts   # Auth + Postgres adapter
 src/lib/supabase-config.ts    # publishable key only; runtime config.json
 src/lib/store.ts              # in-memory helpers for tests
 src/lib/csv.ts                # CSV export / import
-supabase/schema.sql           # table + RLS (run in the SQL editor)
+supabase/schema.sql           # table + RLS + CHECKs + quota/rate triggers
 ```
 
 ## Develop

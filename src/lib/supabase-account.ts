@@ -3,7 +3,7 @@
  * Framework-free: pass a Supabase client. Tests pass a fake client.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { createApplication } from './applications';
+import { assertApplicationQuota, createApplication, mapDatabaseError } from './applications';
 import type { Application, ApplicationInput } from './types';
 
 export type PublicUser = {
@@ -58,7 +58,7 @@ export function toRow(userId: string, app: Application): ApplicationRow {
 
 function throwOn(error: { message: string } | null): void {
   if (error) {
-    throw new Error(error.message);
+    throw new Error(mapDatabaseError(error.message));
   }
 }
 
@@ -126,6 +126,8 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
     async add(input) {
       const user = await requireUser();
       const app = createApplication(input);
+      const existing = await list();
+      assertApplicationQuota(existing.length + 1);
       const { error } = await client.from('applications').insert(toRow(user.id, app));
       throwOn(error);
       return list();
@@ -160,13 +162,10 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
 
     async replaceAll(apps) {
       const user = await requireUser();
-      const { error: delError } = await client.from('applications').delete().eq('user_id', user.id);
-      throwOn(delError);
-      if (apps.length > 0) {
-        const rows = apps.map((app) => toRow(user.id, createApplication(app, app.id)));
-        const { error } = await client.from('applications').insert(rows);
-        throwOn(error);
-      }
+      assertApplicationQuota(apps.length);
+      const rows = apps.map((app) => toRow(user.id, createApplication(app, app.id)));
+      const { error } = await client.rpc('replace_own_applications', { p_rows: rows });
+      throwOn(error);
       return list();
     }
   };

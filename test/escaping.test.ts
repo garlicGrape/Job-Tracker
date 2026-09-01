@@ -149,4 +149,15 @@ describe('CSV round-trip', () => {
     ].join('\n');
     expect(parseApplicationsCsv(csv)).toHaveLength(1);
   });
+
+  it('skips a row whose company is over the length cap', () => {
+    const csv = [
+      'Company,Title,Date Applied,Received Offer',
+      `${'A'.repeat(201)},Dev,2026-01-01,FALSE`,
+      'Good,Dev,2026-01-01,FALSE'
+    ].join('\n');
+    const apps = parseApplicationsCsv(csv);
+    expect(apps).toHaveLength(1);
+    expect(apps[0].company).toBe('Good');
+  });
 });
