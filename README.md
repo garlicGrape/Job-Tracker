@@ -51,8 +51,8 @@ Browser
 
 1. **Account** — create an account or sign in. The session is a Supabase Auth
    JWT in the browser.
-2. **Add / edit** — validated, then written to `applications` as *your* row.
-3. **Offer checkbox** — updates only that row’s `received_offer`.
+2. **Add / edit / delete** — validated, then written to `applications` as *your* row. Delete asks for a second click to confirm.
+3. **Offer status** — updates only that row’s `received_offer`.
 4. **Export CSV** — download a copy. Formula-looking values get a leading `'`.
 5. **Import CSV** — appends those rows to *your* account.
 
