@@ -17,46 +17,55 @@ not a Node server you have to keep alive.
 | Supabase Auth | Email / password accounts |
 | `public.applications` | Your rows (`user_id`, company, title, `date_applied` as `YYYY-MM-DD` text, offer flag, posting URL) |
 | Row-level security | `auth.uid() = user_id` on select/insert/update/delete. Account B cannot read account A. |
-| Abuse limits | Postgres CHECKs (field length, date shape, http(s) URLs), **500 listings per account**, and **30 inserts per 10 minutes** per account. Enforced in the database, not only the form. |
+| Abuse limits | **No cap on how many listings you keep.** Postgres bounds row *size* (field length, date shape, http(s) URLs) and write *rate* (5,000 rows per statement, 20,000 rows per hour, per account). Enforced in the database, not only the form. |
 | Publishable key | `sb_publishable_...` — low privilege, same as the old anon JWT. The browser needs *some* public identifier. **Secret** keys (`sb_secret_...`, `service_role`) never go in the app or git. |
 
 GitHub Pages and Lovable only serve the UI. They never see the table.
 
-### Abuse limits (spam / oversized rows)
+### Unlimited listings, still protected
+
+**There is no limit on how many listings an account keeps.** Apply to as many
+jobs as you want.
+
+A row cap was never what protected the database. What protects it is bounding
+how large one row can be and how fast rows can be created. Those two bounds
+hold no matter how many listings you accumulate, so the ceiling is unnecessary.
 
 Anyone can read the publishable key from DevTools and call the Supabase REST API
-directly, so **limits live in Postgres**. Re-run [`supabase/schema.sql`](supabase/schema.sql)
-in the SQL editor after pulling this change. The UI shows the same errors.
+directly, so **the limits live in Postgres**. Re-run
+[`supabase/schema.sql`](supabase/schema.sql) in the SQL editor after pulling this
+change. The UI shows the same errors.
 
 | Limit | Where it is enforced | Why |
 | ----- | -------------------- | --- |
 | Sign-in required | RLS: `to authenticated` | Anonymous traffic cannot insert. |
-| Own rows only | RLS: `auth.uid() = user_id` | Account B cannot write into account A. |
-| Company / title ≤ 200 chars | `CHECK` + `validateApplication` | Stops multi-megabyte strings. |
+| Own rows only | RLS: `auth.uid() = user_id` | Account B cannot read or write account A. |
+| Company / title ≤ 200 chars | `CHECK` + `validateApplication` | Bounds one row. Many rows cannot mean unbounded bytes. |
 | Posting URL ≤ 2048 chars, `http(s)` only | `CHECK` + `validateApplication` | Stops junk protocols and huge URLs. |
 | Date `YYYY-MM-DD` | `CHECK` + calendar check in JS | Stops garbage in the text date column. |
-| 500 listings per account | `AFTER INSERT` trigger (statement-level) + `replace_own_applications` RPC | Caps table growth even on a bulk CSV import. |
-| 30 insert **statements** / 10 minutes | write-log trigger | A form spam loop is many statements; one CSV import is one statement. |
-| CSV import is one transaction | `replace_own_applications` RPC | Delete + insert roll back together, so a rejected import cannot wipe existing rows. |
-| CSV file ≤ 512 KB | UI, before `FileReader` | Avoids loading a huge file in the browser. |
+| 5,000 rows per statement | `applications_write_rate` trigger | One runaway insert cannot dump millions of rows. |
+| 20,000 rows per rolling hour | same trigger, via `application_write_log` | Bounds growth *rate* per account. No lifetime ceiling. |
+| CSV file ≤ 5 MB | UI, before `FileReader` | Avoids loading a huge file in the browser. |
 
-Client checks are for a clear error message. Skipping them (curl, a script) still
-hits the same Postgres constraints.
+Client checks exist for a clear error message. Skipping them (curl, a script)
+still hits the same Postgres constraints.
+
+**What this means in practice.** Hand-entering listings is one row per save, so
+the hourly budget is unreachable by a human. A CSV import of a few thousand past
+applications is one statement and lands in one write. Only a script hammering
+the API runs into the ceiling, and even then it is throttled rather than
+letting the table grow without bound.
+
+Reads are paged (`LIMITS.pageSize`, 1,000 rows per request) because PostgREST
+caps a single response, and the table is ordered by
+`(user_id, date_applied, id)` so a large account still reads from an index
+instead of re-sorting. The UI renders 250 rows at a time with a **Show more**
+button, so thousands of listings do not stall the browser.
 
 **Sign-up spam** (many accounts, then one listing each) is Auth, not this table.
 In the Supabase dashboard: **Authentication → Rate Limits**, and optionally
 **Authentication → Attack Protection** (CAPTCHA). This app cannot add a secret
 CAPTCHA key; that setting stays in your project.
-
-The free-tier database size and the 500-row cap are what prevent “crash the
-database.” Postgres will not fall over from 500 short rows.
-
-**If you apply to a lot of jobs:** 500 is a ceiling against abuse, not a daily
-quota. A heavy search is usually dozens to a couple of hundred listings. You
-can sit at 200 rows and keep adding. The 30-per-10-minutes limit is on *saves*
-(clicking Add, or one CSV import), not on how many jobs you apply to overall.
-Importing a backup CSV counts as one write. Delete rows you are done with if
-you ever near 500.
 
 ### Why a key in the browser is not a “database password”
 
@@ -91,7 +100,8 @@ Browser
 2. **Add / edit / delete** — validated, then written to `applications` as *your* row. Delete asks for a second click to confirm.
 3. **Offer status** — updates only that row’s `received_offer`.
 4. **Export CSV** — download a copy. Formula-looking values get a leading `'`.
-5. **Import CSV** — appends those rows to *your* account.
+5. **Import CSV** — appends those rows to *your* account in one insert. Nothing
+   existing is deleted, so a rejected import cannot cost you data.
 
 Sign out, close the tab, or open another device: sign in again and the list is
 still there.
@@ -100,8 +110,8 @@ still there.
 
 1. Create a free project at [supabase.com](https://supabase.com).
 2. SQL editor: paste and run [`supabase/schema.sql`](supabase/schema.sql). If you
-   already ran an older copy, run it again — it adds CHECKs and quota triggers
-   without dropping your rows.
+   already ran an older copy, run it again — it lifts the old 500-listing cap
+   and installs the row-size and write-rate limits without dropping your rows.
 3. Authentication → Providers → Email: turn **off** “Confirm email” if you want
    to sign in immediately on a personal app.
 4. **Settings → API Keys** (not the legacy JWT tab). If you only see *anon* /
@@ -154,7 +164,7 @@ src/lib/supabase-account.ts   # Auth + Postgres adapter
 src/lib/supabase-config.ts    # publishable key only; runtime config.json
 src/lib/store.ts              # in-memory helpers for tests
 src/lib/csv.ts                # CSV export / import
-supabase/schema.sql           # table + RLS + CHECKs + quota/rate triggers
+supabase/schema.sql           # table + RLS + CHECKs + write-rate trigger
 ```
 
 ## Develop

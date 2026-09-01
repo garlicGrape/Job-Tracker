@@ -8,18 +8,21 @@
 import type { Application, ApplicationInput } from './types';
 
 /**
- * Abuse / integrity limits. Postgres CHECKs and triggers in
- * supabase/schema.sql use the same numbers so a direct API call cannot
- * skip them. Keep the SQL file in sync when changing these.
+ * Abuse / integrity limits. Postgres CHECKs and the write-rate trigger in
+ * supabase/schema.sql use the same numbers so a direct API call cannot skip
+ * them. Keep the SQL file in sync when changing these.
+ *
+ * There is deliberately no cap on how many listings an account keeps. What
+ * is bounded is the size of one row and how fast rows can be created.
  */
 export const LIMITS = {
   maxCompanyLength: 200,
   maxTitleLength: 200,
   maxPostingUrlLength: 2048,
-  maxApplicationsPerUser: 500,
-  maxWritesPerWindow: 30,
-  writeWindowMinutes: 10,
-  maxCsvBytes: 512 * 1024
+  maxRowsPerWrite: 5000,
+  maxRowsPerHour: 20000,
+  maxCsvBytes: 5 * 1024 * 1024,
+  pageSize: 1000
 } as const;
 
 /**
@@ -157,19 +160,21 @@ export function createApplication(
 }
 
 /**
- * Reject a write that would take an account past the listing cap.
+ * Bound a single write. An account may hold any number of listings, but one
+ * statement may not carry more rows than Postgres will accept.
  */
-export function assertApplicationQuota(nextCount: number): void {
-  if (nextCount > LIMITS.maxApplicationsPerUser) {
+export function assertWriteBatchSize(rowCount: number): void {
+  if (rowCount > LIMITS.maxRowsPerWrite) {
     throw new Error(
-      `Too many listings (max ${LIMITS.maxApplicationsPerUser} per account). Delete some before adding more.`
+      `Too many listings in one write (max ${LIMITS.maxRowsPerWrite}). Split the import into smaller files.`
     );
   }
 }
 
 export function assertCsvByteSize(bytes: number): void {
   if (bytes > LIMITS.maxCsvBytes) {
-    throw new Error('CSV file is too large (max 512 KB).');
+    const mb = LIMITS.maxCsvBytes / (1024 * 1024);
+    throw new Error(`CSV file is too large (max ${mb} MB).`);
   }
 }
 
@@ -179,11 +184,11 @@ export function assertCsvByteSize(bytes: number): void {
  */
 export function mapDatabaseError(message: string): string {
   const lower = message.toLowerCase();
-  if (lower.includes('too many listings')) {
-    return `Too many listings (max ${LIMITS.maxApplicationsPerUser} per account). Delete some before adding more.`;
+  if (lower.includes('in one write')) {
+    return `Too many listings in one write (max ${LIMITS.maxRowsPerWrite}). Split the import into smaller files.`;
   }
-  if (lower.includes('too many listing writes')) {
-    return 'Too many listing writes in a short time. Try again in a few minutes.';
+  if (lower.includes('past hour')) {
+    return 'Too many listings added in the past hour. Try again later.';
   }
   if (lower.includes('applications_company_len')) {
     return `Company must be at most ${LIMITS.maxCompanyLength} characters.`;

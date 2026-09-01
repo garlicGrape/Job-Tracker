@@ -3,9 +3,10 @@
 -- Then turn off "Confirm email" under Authentication → Providers → Email
 -- if you want to sign in immediately on a personal app.
 --
--- Limits below match src/lib/applications.ts LIMITS. Re-run this file after
--- upgrading; it is idempotent. They exist in Postgres so a script that skips
--- the UI still cannot flood or corrupt the table.
+-- There is NO cap on how many listings an account keeps. Protection comes
+-- from bounding how big one row can be and how fast rows can be created,
+-- which is what actually protects the database. Limits below match
+-- src/lib/applications.ts LIMITS. Re-running this file is idempotent.
 
 create table if not exists public.applications (
   id uuid primary key,
@@ -18,15 +19,27 @@ create table if not exists public.applications (
   created_at timestamptz not null default now()
 );
 
-create index if not exists applications_user_id_idx
-  on public.applications (user_id);
+-- Ordered index for the paged read the client uses. Without it, listing a
+-- large account re-sorts the whole partition on every page. Its leading
+-- column also serves plain user_id lookups, which makes the older
+-- single-column index redundant: dropping it removes write cost from every
+-- insert, which is what an account with many listings feels most.
+create index if not exists applications_user_date_id_idx
+  on public.applications (user_id, date_applied, id);
+
+drop index if exists public.applications_user_id_idx;
 
 -- Internal write log for per-account rate limits. No client policies.
 create table if not exists public.application_write_log (
   id bigint generated always as identity primary key,
   user_id uuid not null,
+  rows int not null default 1,
   created_at timestamptz not null default now()
 );
+
+-- Upgrade path from the earlier statement-counting version of this table.
+alter table public.application_write_log
+  add column if not exists rows int not null default 1;
 
 create index if not exists application_write_log_user_created_idx
   on public.application_write_log (user_id, created_at);
@@ -37,7 +50,8 @@ alter table public.application_write_log enable row level security;
 revoke all on public.application_write_log from anon, authenticated, public;
 
 -- Field CHECKs: oversized or garbage values are rejected even if the
--- browser validation is skipped.
+-- browser validation is skipped. These bound the size of a single row,
+-- which is what keeps "many rows" from meaning "unbounded bytes".
 alter table public.applications drop constraint if exists applications_company_len;
 alter table public.applications add constraint applications_company_len
   check (char_length(company) between 1 and 200);
@@ -87,41 +101,17 @@ create policy "applications_delete_own"
   to authenticated
   using (auth.uid() = user_id);
 
--- 500 listings per account. AFTER STATEMENT so a bulk INSERT of 501 rows
--- rolls back as a whole. Advisory lock serializes concurrent writers.
-create or replace function public.enforce_application_quota()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  n int;
-  uid uuid := auth.uid();
-begin
-  if uid is null then
-    return null;
-  end if;
-  perform pg_advisory_xact_lock(hashtextextended(uid::text, 0));
-  select count(*) into n
-  from public.applications
-  where user_id = uid;
-  if n > 500 then
-    raise exception 'Too many listings (max 500 per account). Delete some before adding more.';
-  end if;
-  return null;
-end;
-$$;
-
+-- Listings are unlimited: the old 500-row ceiling and the delete-then-insert
+-- import RPC are both removed. Import appends now, so nothing is deleted.
 drop trigger if exists applications_quota on public.applications;
-create trigger applications_quota
-  after insert on public.applications
-  for each statement
-  execute function public.enforce_application_quota();
+drop function if exists public.enforce_application_quota();
+drop function if exists public.replace_own_applications(jsonb);
 
--- 30 INSERT statements per 10 minutes per account. A CSV import is one
--- statement (many rows) and still counts as one write. A tight add-loop
--- is 30+ statements and is blocked.
+-- Rate limit on ROWS, not on total stored rows: at most 5,000 rows in one
+-- statement and 20,000 rows per rolling hour per account. A real CSV import
+-- lands in one statement. A script trying to manufacture millions of rows
+-- is bounded no matter how long it runs, and the account still has no
+-- lifetime ceiling.
 create or replace function public.enforce_application_write_rate()
 returns trigger
 language plpgsql
@@ -129,27 +119,35 @@ security definer
 set search_path = public
 as $$
 declare
-  recent int;
   uid uuid := auth.uid();
+  n int;
+  recent bigint;
 begin
   if uid is null then
     return null;
   end if;
 
+  select count(*) into n from inserted;
+
+  if n > 5000 then
+    raise exception 'Too many listings in one write (max 5000). Split the import into smaller files.';
+  end if;
+
   delete from public.application_write_log
   where user_id = uid
-    and created_at < now() - interval '1 hour';
+    and created_at < now() - interval '1 day';
 
-  insert into public.application_write_log (user_id) values (uid);
+  insert into public.application_write_log (user_id, rows) values (uid, n);
 
-  select count(*) into recent
+  select coalesce(sum(rows), 0) into recent
   from public.application_write_log
   where user_id = uid
-    and created_at > now() - interval '10 minutes';
+    and created_at > now() - interval '1 hour';
 
-  if recent > 30 then
-    raise exception 'Too many listing writes in a short time. Try again in a few minutes.';
+  if recent > 20000 then
+    raise exception 'Too many listings added in the past hour. Try again later.';
   end if;
+
   return null;
 end;
 $$;
@@ -157,55 +155,8 @@ $$;
 drop trigger if exists applications_write_rate on public.applications;
 create trigger applications_write_rate
   after insert on public.applications
+  referencing new table as inserted
   for each statement
   execute function public.enforce_application_write_rate();
 
-revoke all on function public.enforce_application_quota() from public, anon, authenticated;
 revoke all on function public.enforce_application_write_rate() from public, anon, authenticated;
-
--- CSV import used to DELETE then INSERT as two HTTP calls. If the insert was
--- rejected (quota / rate / CHECK), the delete had already committed. One
--- RPC keeps both in a single transaction so a rejected import cannot wipe
--- the account.
-create or replace function public.replace_own_applications(p_rows jsonb)
-returns void
-language plpgsql
-security invoker
-set search_path = public
-as $$
-declare
-  n int;
-begin
-  if auth.uid() is null then
-    raise exception 'Sign in to continue.';
-  end if;
-
-  n := jsonb_array_length(coalesce(p_rows, '[]'::jsonb));
-  if n > 500 then
-    raise exception 'Too many listings (max 500 per account). Delete some before adding more.';
-  end if;
-
-  delete from public.applications
-  where user_id = auth.uid();
-
-  if n = 0 then
-    return;
-  end if;
-
-  insert into public.applications (
-    id, user_id, company, title, date_applied, received_offer, posting_url
-  )
-  select
-    (item->>'id')::uuid,
-    auth.uid(),
-    item->>'company',
-    item->>'title',
-    item->>'date_applied',
-    coalesce((item->>'received_offer')::boolean, false),
-    coalesce(item->>'posting_url', '')
-  from jsonb_array_elements(p_rows) as item;
-end;
-$$;
-
-revoke all on function public.replace_own_applications(jsonb) from public, anon;
-grant execute on function public.replace_own_applications(jsonb) to authenticated;
