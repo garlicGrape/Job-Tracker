@@ -16,4 +16,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npm run build
+      - run: npm run build:pages
+      - name: docs/ matches the production build
+        run: |
+          if [ -n "$(git status --porcelain -- docs)" ]; then
+            echo "docs/ is out of date. Run npm run build:pages and commit it."
+            git status -- docs
+            git diff -- docs
+            exit 1
+          fi

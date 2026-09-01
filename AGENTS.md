@@ -25,6 +25,9 @@ project and it is not a Node server. Read this before changing code.
   coercion will shift them by a day.
 - **Never edit `test/harness.ts` to make a test pass.** Fix `src/lib` instead.
 - `npm test` is the gate. **Do not open a PR on red.**
+- GitHub Pages publishes `docs/` from `main` (legacy Jekyll, `/docs` folder).
+  After a UI change run `npm run build:pages` and commit `docs/`. CI fails if
+  `docs/` does not match the production build.
 
 ## Commands
 

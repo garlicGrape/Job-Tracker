@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:pages": "vite build && node ./scripts/sync-docs.js",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"

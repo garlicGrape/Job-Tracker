@@ -72,39 +72,12 @@ work; none need Google.
 
 ### GitHub Pages
 
-1. Push this repo to GitHub.
-2. Settings → Pages → Deploy from a branch, **or** add a GitHub Actions
-   workflow that runs `npm ci && npm run build` and uploads `dist/`.
-3. Because `vite.config.ts` sets `base: './'`, the app also works from a
-   project-pages URL (`https://<user>.github.io/<repo>/`).
+Live site: **https://garlicgrape.github.io/Job-Tracker/**
 
-A minimal Actions workflow:
-
-```yaml
-name: pages
-on:
-  push:
-    branches: [main]
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci && npm test && npm run build
-      - uses: actions/upload-pages-artifact@v3
-        with: { path: dist }
-      - id: deploy
-        uses: actions/deploy-pages@v4
-```
+This repo’s Pages source is **Deploy from a branch → `main` → `/docs`**
+(Jekyll). `npm run build:pages` copies the Vite build into `docs/` (plus
+`.nojekyll` so Jekyll does not wrap the SPA). After changing the UI, run
+that script and commit `docs/` so Pages stays current.
 
 ### Netlify / Vercel / Cloudflare Pages
 
