@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { setup } from './harness.js';
+import { addApplication, getApplications } from '../src/lib/store';
+import { createMemoryStorage } from './harness';
 
 describe('validation', () => {
   it('accepts a valid application', () => {
-    const { code, grid } = setup();
-    const result = code.addApplication({
+    const storage = createMemoryStorage();
+    const result = addApplication(storage, {
       company: 'Acme Corp',
       title: 'Senior Engineer',
       dateApplied: '2026-08-20',
@@ -12,41 +13,41 @@ describe('validation', () => {
     });
     expect(result).toHaveLength(1);
     expect(result[0].company).toBe('Acme Corp');
-    // header + one data row
-    expect(grid).toHaveLength(2);
+    expect(result[0].id).toEqual(expect.any(String));
+    expect(getApplications(storage)).toHaveLength(1);
   });
 
   it('requires a company', () => {
-    const { code } = setup();
+    const storage = createMemoryStorage();
     expect(() =>
-      code.addApplication({ company: '', title: 'Dev', dateApplied: '2026-08-20' })
+      addApplication(storage, { company: '', title: 'Dev', dateApplied: '2026-08-20' })
     ).toThrow(/company is required/i);
   });
 
   it('requires a title', () => {
-    const { code } = setup();
+    const storage = createMemoryStorage();
     expect(() =>
-      code.addApplication({ company: 'Acme', title: '   ', dateApplied: '2026-08-20' })
+      addApplication(storage, { company: 'Acme', title: '   ', dateApplied: '2026-08-20' })
     ).toThrow(/title is required/i);
   });
 
   it('rejects a malformed date', () => {
-    const { code } = setup();
+    const storage = createMemoryStorage();
     expect(() =>
-      code.addApplication({ company: 'Acme', title: 'Dev', dateApplied: '08/20/2026' })
+      addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '08/20/2026' })
     ).toThrow(/YYYY-MM-DD/);
   });
 
   it('rejects an impossible calendar date', () => {
-    const { code } = setup();
+    const storage = createMemoryStorage();
     expect(() =>
-      code.addApplication({ company: 'Acme', title: 'Dev', dateApplied: '2026-02-30' })
+      addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-02-30' })
     ).toThrow(/valid date/i);
   });
 
   it('trims surrounding whitespace on text fields', () => {
-    const { code } = setup();
-    const result = code.addApplication({
+    const storage = createMemoryStorage();
+    const result = addApplication(storage, {
       company: '  Globex  ',
       title: '  Full Stack Developer  ',
       dateApplied: '2026-08-25'
@@ -56,8 +57,8 @@ describe('validation', () => {
   });
 
   it('coerces the offer flag to a real boolean', () => {
-    const { code } = setup();
-    const yes = code.addApplication({
+    const storage = createMemoryStorage();
+    const yes = addApplication(storage, {
       company: 'A',
       title: 'B',
       dateApplied: '2026-01-01',
@@ -65,8 +66,8 @@ describe('validation', () => {
     });
     expect(yes[0].receivedOffer).toBe(true);
 
-    const { code: code2 } = setup();
-    const missing = code2.addApplication({
+    const storage2 = createMemoryStorage();
+    const missing = addApplication(storage2, {
       company: 'A',
       title: 'B',
       dateApplied: '2026-01-01'
