@@ -41,56 +41,6 @@ export function toBoolean(value: unknown): boolean {
   );
 }
 
-export const STATUS_LABELS: Record<ApplicationStatus, string> = {
-  applied: 'Applied',
-  interviewing: 'Interviewing',
-  offer: 'Offer',
-  rejected: 'Rejected'
-};
-
-export function isApplicationStatus(value: unknown): value is ApplicationStatus {
-  return typeof value === 'string' && (STATUSES as readonly string[]).includes(value);
-}
-
-/**
- * Read a status from free text: the stored key, its label, or a few common
- * spellings ("interview", "declined"). Returns null when nothing matches.
- */
-export function parseStatus(value: unknown): ApplicationStatus | null {
-  if (value == null) return null;
-  const text = String(value).trim().toLowerCase();
-  if (!text) return null;
-  if (isApplicationStatus(text)) return text;
-  if (text === 'interview' || text === 'interviewing' || text === 'phone screen' || text === 'onsite') {
-    return 'interviewing';
-  }
-  if (text === 'offered' || text === 'accepted' || text === 'hired') return 'offer';
-  if (text === 'declined' || text === 'rejection' || text === 'no' || text === 'closed') {
-    return 'rejected';
-  }
-  if (text === 'waiting' || text === 'pending' || text === 'submitted' || text === 'open') {
-    return 'applied';
-  }
-  return null;
-}
-
-/**
- * Resolve the status for a payload. A missing status falls back to the
- * legacy Received Offer flag (TRUE means offer, anything else applied).
- * A present but unrecognized status is an error rather than a silent reset.
- */
-export function resolveStatus(status: unknown, receivedOffer?: unknown): ApplicationStatus {
-  const text = status == null ? '' : String(status).trim();
-  if (!text) {
-    return toBoolean(receivedOffer) ? 'offer' : 'applied';
-  }
-  const parsed = parseStatus(text);
-  if (!parsed) {
-    throw new Error(`Status must be one of: ${STATUSES.join(', ')}.`);
-  }
-  return parsed;
-}
-
 /**
  * Neutralize spreadsheet formula injection. A value beginning with =, +, -, @
  * (or a leading tab / carriage return) is treated as a formula by Excel and
@@ -121,6 +71,82 @@ export function isValidDate(value: string): boolean {
   }
   const daysInMonth = new Date(year, month, 0).getDate();
   return day >= 1 && day <= daysInMonth;
+}
+
+/**
+ * Today as YYYY-MM-DD in the viewer's own timezone. Dates are text, so the
+ * local calendar day is what a person means by "today".
+ */
+export function todayIsoDate(now: Date = new Date()): string {
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * Whole days from one YYYY-MM-DD string to another, counted on the UTC
+ * calendar so daylight-saving shifts cannot add or drop a day. Returns 0 for
+ * malformed input.
+ */
+export function daysBetween(from: string, to: string): number {
+  if (!isValidDate(from) || !isValidDate(to)) return 0;
+  const [fy, fm, fd] = from.split('-').map(Number);
+  const [ty, tm, td] = to.split('-').map(Number);
+  const ms = Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd);
+  return Math.round(ms / 86400000);
+}
+
+const STATUS_ALIASES: Record<string, ApplicationStatus> = {
+  applied: 'applied',
+  apply: 'applied',
+  waiting: 'applied',
+  pending: 'applied',
+  open: 'applied',
+  'no response': 'applied',
+  interviewing: 'interviewing',
+  interview: 'interviewing',
+  interviews: 'interviewing',
+  screening: 'interviewing',
+  'phone screen': 'interviewing',
+  onsite: 'interviewing',
+  offer: 'offer',
+  offered: 'offer',
+  accepted: 'offer',
+  rejected: 'rejected',
+  reject: 'rejected',
+  rejection: 'rejected',
+  declined: 'rejected',
+  closed: 'rejected',
+  'no thanks': 'rejected'
+};
+
+export function isApplicationStatus(value: unknown): value is ApplicationStatus {
+  return typeof value === 'string' && (STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * Best-effort read of a status from arbitrary input (a form value, a CSV
+ * cell, a Postgres column). Unrecognized text falls back, which is what
+ * keeps rows written by an older version of the app readable.
+ */
+export function normalizeStatus(
+  value: unknown,
+  fallback: ApplicationStatus = 'applied'
+): ApplicationStatus {
+  if (isApplicationStatus(value)) return value;
+  const key = (value == null ? '' : String(value)).trim().toLowerCase();
+  return STATUS_ALIASES[key] ?? fallback;
+}
+
+/**
+ * Decide the stage for a payload. An explicit status wins; otherwise the
+ * legacy `receivedOffer` flag still promotes a row to "offer".
+ */
+export function resolveStatus(app: ApplicationInput): ApplicationStatus {
+  if (app.status != null && String(app.status).trim() !== '') {
+    return normalizeStatus(app.status, toBoolean(app.receivedOffer) ? 'offer' : 'applied');
+  }
+  return toBoolean(app.receivedOffer) ? 'offer' : 'applied';
 }
 
 /**
@@ -163,7 +189,6 @@ export function validateApplication(
   const title = (app.title == null ? '' : String(app.title)).trim();
   const dateApplied = (app.dateApplied == null ? '' : String(app.dateApplied)).trim();
   const postingUrl = normalizePostingUrl(app.postingUrl);
-  const status = resolveStatus(app.status, app.receivedOffer);
 
   if (!company) {
     throw new Error('Company is required.');
@@ -187,11 +212,14 @@ export function validateApplication(
     throw new Error('Posting URL must be a valid http or https URL.');
   }
 
+  const status = resolveStatus(app);
+
   return {
     company,
     title,
     dateApplied,
     status,
+    receivedOffer: status === 'offer',
     postingUrl
   };
 }
@@ -250,11 +278,8 @@ export function mapDatabaseError(message: string): string {
   if (lower.includes('applications_date_applied_fmt')) {
     return 'Date Applied must be a valid date in YYYY-MM-DD format.';
   }
-  if (lower.includes('applications_status_valid')) {
+  if (lower.includes('applications_status')) {
     return `Status must be one of: ${STATUSES.join(', ')}.`;
-  }
-  if (lower.includes('column') && lower.includes('status') && lower.includes('does not exist')) {
-    return 'Database schema is out of date. Re-run supabase/schema.sql in the Supabase SQL editor.';
   }
   if (lower.includes('applications_posting_url')) {
     return `Posting URL must be a valid http or https URL (max ${LIMITS.maxPostingUrlLength} characters).`;

@@ -1,150 +1,151 @@
 import { describe, it, expect } from 'vitest';
-import { addDays, computeMetrics, daysBetween, formatPercent, weekStartOf } from '../src/lib/metrics';
-import type { Application, ApplicationStatus } from '../src/lib/types';
+import { computeMetrics, countByStatus } from '../src/lib/metrics';
+import { createApplication, daysBetween, todayIsoDate } from '../src/lib/applications';
+import type { ApplicationInput } from '../src/lib/types';
+
+const TODAY = '2026-03-01';
 
 let seq = 0;
-function app(dateApplied: string, status: ApplicationStatus = 'applied', company = 'Acme'): Application {
-  seq += 1;
-  return { id: `m-${seq}`, company, title: 'Dev', dateApplied, status, postingUrl: '' };
+function app(input: ApplicationInput) {
+  return createApplication(input, 'id-' + ++seq);
 }
 
-const TODAY = '2026-09-02'; // a Wednesday
+/** A small pipeline: 2 applied, 1 interviewing, 1 offer, 2 rejected. */
+function pipeline() {
+  return [
+    app({ company: 'Acme', title: 'Dev', dateApplied: '2026-02-28' }),
+    app({ company: 'Globex', title: 'Dev', dateApplied: '2026-01-01' }),
+    app({ company: 'Initech', title: 'PM', dateApplied: '2026-02-20', status: 'interviewing' }),
+    app({ company: 'Hooli', title: 'Staff', dateApplied: '2026-02-10', status: 'offer' }),
+    app({ company: 'Acme', title: 'Intern', dateApplied: '2026-02-01', status: 'rejected' }),
+    app({ company: 'Umbrella', title: 'SRE', dateApplied: '2025-12-01', status: 'rejected' })
+  ];
+}
 
-describe('date helpers', () => {
-  it('counts whole days between YYYY-MM-DD strings without timezone drift', () => {
-    expect(daysBetween('2026-09-01', '2026-09-02')).toBe(1);
-    expect(daysBetween('2026-09-02', '2026-09-02')).toBe(0);
-    expect(daysBetween('2026-09-03', '2026-09-02')).toBe(-1);
+describe('date arithmetic', () => {
+  it('counts whole days between two YYYY-MM-DD strings', () => {
+    expect(daysBetween('2026-03-01', '2026-03-01')).toBe(0);
     expect(daysBetween('2026-02-28', '2026-03-01')).toBe(1);
-    expect(daysBetween('2025-12-31', '2026-12-31')).toBe(365);
+    expect(daysBetween('2026-01-01', '2026-03-01')).toBe(59);
+    expect(daysBetween('2026-03-02', '2026-03-01')).toBe(-1);
   });
 
-  it('adds days across month and year boundaries', () => {
-    expect(addDays('2026-08-31', 1)).toBe('2026-09-01');
-    expect(addDays('2026-01-01', -1)).toBe('2025-12-31');
+  it('crosses a daylight-saving boundary without gaining or losing a day', () => {
+    expect(daysBetween('2026-03-07', '2026-03-09')).toBe(2);
+    expect(daysBetween('2026-10-31', '2026-11-02')).toBe(2);
   });
 
-  it('finds the Monday of a week', () => {
-    expect(weekStartOf('2026-09-02')).toBe('2026-08-31');
-    expect(weekStartOf('2026-08-31')).toBe('2026-08-31');
-    expect(weekStartOf('2026-09-06')).toBe('2026-08-31');
-    expect(weekStartOf('2026-09-07')).toBe('2026-09-07');
+  it('returns 0 for malformed input', () => {
+    expect(daysBetween('nope', '2026-03-01')).toBe(0);
+    expect(daysBetween('2026-03-01', '')).toBe(0);
+  });
+
+  it('formats today as YYYY-MM-DD in local time', () => {
+    expect(todayIsoDate(new Date(2026, 2, 1, 23, 30))).toBe('2026-03-01');
+    expect(todayIsoDate()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('countByStatus', () => {
+  it('counts every stage, including the empty ones', () => {
+    expect(countByStatus(pipeline())).toEqual({
+      applied: 2,
+      interviewing: 1,
+      offer: 1,
+      rejected: 2
+    });
+  });
+
+  it('returns zeros for an empty list', () => {
+    expect(countByStatus([])).toEqual({ applied: 0, interviewing: 0, offer: 0, rejected: 0 });
   });
 });
 
 describe('computeMetrics', () => {
-  it('returns zeros and nulls for an empty pipeline', () => {
-    const m = computeMetrics([], TODAY);
-    expect(m.total).toBe(0);
-    expect(m.byStatus).toEqual({ applied: 0, interviewing: 0, offer: 0, rejected: 0 });
-    expect(m.responseRate).toBeNull();
-    expect(m.offerRate).toBeNull();
-    expect(m.perWeek).toBeNull();
-    expect(m.longestWaitingDays).toBeNull();
-    expect(m.medianActiveDays).toBeNull();
-    expect(m.firstApplied).toBeNull();
-    expect(m.weekly).toHaveLength(8);
-    expect(m.weekly.every((w) => w.count === 0)).toBe(true);
+  const metrics = computeMetrics(pipeline(), TODAY);
+
+  it('splits open from answered', () => {
+    expect(metrics.total).toBe(6);
+    expect(metrics.open).toBe(3);
+    expect(metrics.answered).toBe(4);
   });
 
-  it('counts each status and derives active and responded totals', () => {
-    const m = computeMetrics(
-      [
-        app('2026-08-01', 'applied'),
-        app('2026-08-02', 'applied'),
-        app('2026-08-03', 'interviewing'),
-        app('2026-08-04', 'offer'),
-        app('2026-08-05', 'rejected'),
-        app('2026-08-06', 'rejected')
-      ],
-      TODAY
-    );
-    expect(m.total).toBe(6);
-    expect(m.byStatus).toEqual({ applied: 2, interviewing: 1, offer: 1, rejected: 2 });
-    expect(m.active).toBe(3);
-    expect(m.responded).toBe(4);
-    expect(m.responseRate).toBeCloseTo(4 / 6);
-    expect(m.interviewRate).toBeCloseTo(2 / 6);
-    expect(m.offerRate).toBeCloseTo(1 / 6);
-    expect(m.rejectionRate).toBeCloseTo(2 / 6);
+  it('reports response, interview, offer, and rejection rates as percentages', () => {
+    expect(metrics.responseRate).toBe(67);
+    expect(metrics.interviewRate).toBe(33);
+    expect(metrics.offerRate).toBe(17);
+    expect(metrics.rejectionRate).toBe(33);
   });
 
-  it('counts recent activity windows and ignores future-dated rows', () => {
-    const m = computeMetrics(
-      [
-        app(TODAY),
-        app(addDays(TODAY, -6)),
-        app(addDays(TODAY, -7)),
-        app(addDays(TODAY, -29)),
-        app(addDays(TODAY, -30)),
-        app(addDays(TODAY, 3))
-      ],
-      TODAY
-    );
-    expect(m.last7Days).toBe(2);
-    expect(m.last30Days).toBe(4);
+  it('counts recent activity and a weekly pace', () => {
+    expect(metrics.appliedLast7Days).toBe(1);
+    expect(metrics.appliedLast30Days).toBe(4);
+    expect(metrics.weeklyPace).toBe(0.9);
+    expect(metrics.lastAppliedDate).toBe('2026-02-28');
+  });
+
+  it('measures how long the open applications have been waiting', () => {
+    // Open: Acme 1 day, Globex 59 days, Initech 9 days.
+    expect(metrics.avgOpenAgeDays).toBe(23);
+    expect(metrics.longestOpenWait).toEqual({ days: 59, company: 'Globex', title: 'Dev' });
   });
 
   it('counts distinct companies case-insensitively', () => {
-    const m = computeMetrics(
-      [app('2026-08-01', 'applied', 'Acme'), app('2026-08-02', 'applied', 'acme '), app('2026-08-03', 'applied', 'Globex')],
+    expect(metrics.distinctCompanies).toBe(5);
+    expect(
+      computeMetrics(
+        [
+          app({ company: 'Acme', title: 'A', dateApplied: TODAY }),
+          app({ company: 'acme  ', title: 'B', dateApplied: TODAY })
+        ],
+        TODAY
+      ).distinctCompanies
+    ).toBe(1);
+  });
+
+  it('ignores closed listings when measuring the wait', () => {
+    const closedOnly = computeMetrics(
+      [app({ company: 'Acme', title: 'Dev', dateApplied: '2020-01-01', status: 'rejected' })],
       TODAY
     );
-    expect(m.companies).toBe(2);
+    expect(closedOnly.open).toBe(0);
+    expect(closedOnly.avgOpenAgeDays).toBe(0);
+    expect(closedOnly.longestOpenWait).toBeNull();
   });
 
-  it('measures pace from the first application to today', () => {
-    // 14 days inclusive of both ends = 2 weeks, 4 applications → 2 per week.
-    const m = computeMetrics(
-      [app(addDays(TODAY, -13)), app(addDays(TODAY, -10)), app(addDays(TODAY, -3)), app(TODAY)],
+  it('does not count a future date as recent activity', () => {
+    const future = computeMetrics(
+      [app({ company: 'Acme', title: 'Dev', dateApplied: '2026-03-10' })],
       TODAY
     );
-    expect(m.firstApplied).toBe(addDays(TODAY, -13));
-    expect(m.lastApplied).toBe(TODAY);
-    expect(m.perWeek).toBeCloseTo(2);
+    expect(future.appliedLast7Days).toBe(0);
+    expect(future.appliedLast30Days).toBe(0);
+    expect(future.avgOpenAgeDays).toBe(0);
   });
 
-  it('reports the longest wait among unanswered listings and the median active age', () => {
-    const m = computeMetrics(
-      [
-        app(addDays(TODAY, -40), 'applied'),
-        app(addDays(TODAY, -10), 'applied'),
-        app(addDays(TODAY, -4), 'interviewing'),
-        app(addDays(TODAY, -90), 'rejected'),
-        app(addDays(TODAY, -60), 'offer')
-      ],
-      TODAY
-    );
-    expect(m.longestWaitingDays).toBe(40);
-    expect(m.medianActiveDays).toBe(10);
+  it('divides by zero safely on an empty account', () => {
+    expect(computeMetrics([], TODAY)).toEqual({
+      total: 0,
+      counts: { applied: 0, interviewing: 0, offer: 0, rejected: 0 },
+      open: 0,
+      answered: 0,
+      responseRate: 0,
+      interviewRate: 0,
+      offerRate: 0,
+      rejectionRate: 0,
+      appliedLast7Days: 0,
+      appliedLast30Days: 0,
+      weeklyPace: 0,
+      avgOpenAgeDays: 0,
+      longestOpenWait: null,
+      distinctCompanies: 0,
+      lastAppliedDate: ''
+    });
   });
 
-  it('buckets applications into Monday-start weeks, current week last', () => {
-    const m = computeMetrics(
-      [
-        app('2026-08-31'), // Monday of this week
-        app('2026-09-02'), // today
-        app('2026-09-06'), // Sunday, still this week
-        app('2026-08-30'), // Sunday of last week
-        app('2026-08-24'), // Monday of last week
-        app('2026-07-13'), // Monday, 7 weeks back (oldest bucket)
-        app('2026-07-12') // before the window
-      ],
-      TODAY,
-      8
-    );
-    expect(m.weekly).toHaveLength(8);
-    expect(m.weekly[0].weekStart).toBe('2026-07-13');
-    expect(m.weekly[7].weekStart).toBe('2026-08-31');
-    expect(m.weekly.map((w) => w.count)).toEqual([1, 0, 0, 0, 0, 0, 2, 3]);
-  });
-});
-
-describe('formatPercent', () => {
-  it('rounds to whole percents and shows a dash for nothing to divide', () => {
-    expect(formatPercent(null)).toBe('—');
-    expect(formatPercent(0)).toBe('0%');
-    expect(formatPercent(1 / 3)).toBe('33%');
-    expect(formatPercent(1)).toBe('100%');
+  it('defaults to the real today when no date is passed', () => {
+    const live = computeMetrics([app({ company: 'Acme', title: 'Dev', dateApplied: todayIsoDate() })]);
+    expect(live.appliedLast7Days).toBe(1);
+    expect(live.avgOpenAgeDays).toBe(0);
   });
 });

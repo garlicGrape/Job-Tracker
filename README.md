@@ -4,14 +4,29 @@ A **static** Vite + React app with **accounts**. You sign in with email and
 password; job listings persist in **your Supabase Postgres database**, private
 to that account via row-level security.
 
-Five fields — **Company**, **Title**, **Date Applied**, **Status**,
-**Posting URL** — plus CSV export/import as a personal backup.
+Five fields — **Company**, **Title**, **Date Applied**, **Stage**, **Posting
+URL** — plus search / filter / sort / grouping, pipeline metrics, and CSV
+export/import as a personal backup.
 
-**Status** is one of `applied`, `interviewing`, `offer`, `rejected`. Change it
-inline from the table or from the edit form. The dashboard above the table
-turns those statuses into metrics (response rate, interview rate, offer rate,
-pace per week, longest wait) and the table can be searched, filtered by
-status, and sorted.
+**Stages:** `Applied → Interviewing → Offer` or `Rejected`. Change one inline
+from the table without opening the edit form. `Received Offer` still exists as
+a mirror of the offer stage, so older CSV exports keep working.
+
+## Organizing and metrics
+
+Stage counts sit above the form (Applications, Open, Interviewing, Offers,
+Rejected), followed by derived metrics: **response rate** (anything that left
+"Applied"), **interview rate**, **offer rate**, **applications per week** over
+the last 30 days, **last 7 days**, **average wait** on the applications still
+open with the longest one named, and how many **distinct companies** you have
+applied to.
+
+Below the form: a search box (company, title, URL, stage), stage filter chips
+with counts, five sort orders, and an optional **Group by stage** view. All of
+it runs on the list already in memory, so switching views costs no extra
+queries. Both are pure functions in [`src/lib/metrics.ts`](src/lib/metrics.ts)
+and [`src/lib/organize.ts`](src/lib/organize.ts), unit-tested without a
+browser.
 
 ## Database
 
@@ -21,7 +36,7 @@ not a Node server you have to keep alive.
 | Piece | What it does |
 | ----- | ------------ |
 | Supabase Auth | Email / password accounts |
-| `public.applications` | Your rows (`user_id`, company, title, `date_applied` as `YYYY-MM-DD` text, `status`, posting URL) |
+| `public.applications` | Your rows (`user_id`, company, title, `date_applied` as `YYYY-MM-DD` text, `status`, offer flag, posting URL) |
 | Row-level security | `auth.uid() = user_id` on select/insert/update/delete. Account B cannot read account A. |
 | Abuse limits | **No cap on how many listings you keep.** Postgres bounds row *size* (field length, date shape, http(s) URLs) and write *rate* (5,000 rows per statement, 20,000 rows per hour, per account). Enforced in the database, not only the form. |
 | Publishable key | `sb_publishable_...` — low privilege, same as the old anon JWT. The browser needs *some* public identifier. **Secret** keys (`sb_secret_...`, `service_role`) never go in the app or git. |
@@ -49,7 +64,7 @@ change. The UI shows the same errors.
 | Company / title ≤ 200 chars | `CHECK` + `validateApplication` | Bounds one row. Many rows cannot mean unbounded bytes. |
 | Posting URL ≤ 2048 chars, `http(s)` only | `CHECK` + `validateApplication` | Stops junk protocols and huge URLs. |
 | Date `YYYY-MM-DD` | `CHECK` + calendar check in JS | Stops garbage in the text date column. |
-| Status in `applied / interviewing / offer / rejected` | `CHECK` + `resolveStatus` | A row cannot carry an unknown stage. |
+| Stage is one of four values | `CHECK` + `normalizeStatus` | `received_offer` is `CHECK`ed to mirror the offer stage, so the two cannot drift. |
 | 5,000 rows per statement | `applications_write_rate` trigger | One runaway insert cannot dump millions of rows. |
 | 20,000 rows per rolling hour | same trigger, via `application_write_log` | Bounds growth *rate* per account. No lifetime ceiling. |
 | CSV file ≤ 5 MB | UI, before `FileReader` | Avoids loading a huge file in the browser. |
@@ -96,7 +111,9 @@ builds do **not** inline keys; the app loads `config.json` at runtime.
 ```
 Browser
   ├── React UI (src/App.tsx)                     ← sign in / sign up + form (Lovable)
-  ├── Domain logic (src/lib/applications.ts)     ← validation, dates, ids, limits
+  ├── Domain logic (src/lib/applications.ts)     ← validation, dates, stages, ids, limits
+  ├── Metrics (src/lib/metrics.ts)               ← rates, pace, waiting times
+  ├── Organizing (src/lib/organize.ts)           ← search, filter, sort, group
   ├── Supabase adapter (src/lib/supabase-account.ts)
   ├── Store helpers (src/lib/store.ts)           ← used by tests / CSV shape
   └── CSV (src/lib/csv.ts)                       ← export + import
@@ -105,53 +122,24 @@ Browser
 1. **Account** — create an account or sign in. The session is a Supabase Auth
    JWT in the browser.
 2. **Add / edit / delete** — validated, then written to `applications` as *your* row. Delete asks for a second click to confirm.
-3. **Status** — the dropdown in each row (or the edit form) updates only that
-   row’s `status`: applied → interviewing → offer, or rejected at any point.
-4. **Export CSV** — download a copy. Formula-looking values get a leading `'`.
-5. **Import CSV** — appends those rows to *your* account in one insert. Nothing
+3. **Stage** — the stage dropdown on a row writes `status` (and its
+   `received_offer` mirror) for that row only.
+4. **Organize** — search text, filter by stage, sort, or group by stage. All of
+   it is client-side over the list already loaded, so nothing re-queries.
+5. **Export CSV** — download a copy. Formula-looking values get a leading `'`.
+6. **Import CSV** — appends those rows to *your* account in one insert. Nothing
    existing is deleted, so a rejected import cannot cost you data.
 
 Sign out, close the tab, or open another device: sign in again and the list is
 still there.
-
-## Organizing the list
-
-- **Search** company or title.
-- **Filter chips** for All, Active (applied + interviewing), Applied,
-  Interviewing, Offer, Rejected. The big status tiles are the same filters.
-- **Sort** newest, oldest, company A–Z, or by pipeline stage.
-- Rejected rows are muted so open work stands out. Each date shows how many
-  days ago it was.
-
-## Metrics
-
-Everything is computed in the browser from the listings you already have
-(`src/lib/metrics.ts`, pure and unit-tested), so there is nothing extra to
-store.
-
-| Metric | Meaning |
-| ------ | ------- |
-| Applications / Active / Interviewing / Offers / Rejected | Counts by stage. Active = applied + interviewing. |
-| Response rate | Share of listings that moved past “applied” in any direction (interviewing, offer, or rejected). |
-| Interview rate | Share that reached interviewing or offer. |
-| Offer rate | Offers ÷ total. |
-| Last 7 / 30 days | Applications dated inside those windows. |
-| Per week | Average pace from your first application to today. |
-| Companies | Distinct companies, case-insensitive. |
-| Longest wait | Days since the oldest listing still marked applied. |
-| Median age | Median days since applied across active listings. |
-| Pipeline bar | Proportion of each stage right now. |
-| Applications per week | Bar strip for the last 8 Monday-to-Sunday weeks. |
 
 ## Set up Supabase (once)
 
 1. Create a free project at [supabase.com](https://supabase.com).
 2. SQL editor: paste and run [`supabase/schema.sql`](supabase/schema.sql). If you
    already ran an older copy, run it again — it lifts the old 500-listing cap,
-   installs the row-size and write-rate limits, and **replaces the
-   `received_offer` boolean with a `status` column** (existing `TRUE` rows
-   become `offer`, everything else `applied`) without dropping your rows.
-   Until it is re-run, the new UI shows “Database schema is out of date”.
+   installs the row-size and write-rate limits, and adds the `status` column
+   (backfilled from your existing offer flags) without dropping your rows.
 3. Authentication → Providers → Email: turn **off** “Confirm email” if you want
    to sign in immediately on a personal app.
 4. **Settings → API Keys** (not the legacy JWT tab). If you only see *anon* /
@@ -199,13 +187,13 @@ pages run, `https://garlicgrape.github.io/Job-Tracker/config.json` should exist
 
 ```
 src/App.tsx                   # UI (the surface Lovable can restyle)
-src/lib/applications.ts       # validation, dates, formula escaping, limits
+src/lib/applications.ts       # validation, dates, stages, formula escaping, limits
+src/lib/metrics.ts            # pipeline metrics (pure functions)
+src/lib/organize.ts           # search / filter / sort / group (pure functions)
 src/lib/supabase-account.ts   # Auth + Postgres adapter
 src/lib/supabase-config.ts    # publishable key only; runtime config.json
 src/lib/store.ts              # in-memory helpers for tests
 src/lib/csv.ts                # CSV export / import
-src/lib/organize.ts           # search, status filter, sort
-src/lib/metrics.ts            # pipeline metrics and weekly buckets
 supabase/schema.sql           # table + RLS + CHECKs + write-rate trigger
 ```
 
@@ -247,11 +235,6 @@ key-free check stays green.
 1. Sheet: **File → Download → CSV**.
 2. Sign in, then **Import CSV**.
 3. **Export CSV** anytime you want a backup.
-
-Import reads columns by header name, so both the current export
-(`Company,Title,Date Applied,Status,Posting URL`) and the older one with a
-`Received Offer` column work: `TRUE` becomes `offer`, anything else `applied`.
-Status cells accept the key or the label in any case (`rejected`, `Rejected`).
 
 ## Why it's testable offline
 

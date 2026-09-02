@@ -1,21 +1,45 @@
-export const HEADERS = ['Company', 'Title', 'Date Applied', 'Status', 'Posting URL'] as const;
+/**
+ * CSV column order. `Received Offer` stays in place so a spreadsheet or an
+ * older export still imports positionally; `Status` is appended.
+ */
+export const HEADERS = [
+  'Company',
+  'Title',
+  'Date Applied',
+  'Received Offer',
+  'Posting URL',
+  'Status'
+] as const;
 
 export const STORAGE_KEY = 'job-tracker.applications';
 
 /**
- * Pipeline stage of one listing. Stored as lowercase text; the CHECK in
- * supabase/schema.sql accepts exactly these values.
+ * Pipeline stages, in the order an application usually moves through them.
+ * `receivedOffer` is kept as a mirror of `status === 'offer'` so the CSV
+ * column and older rows keep working.
  */
 export const STATUSES = ['applied', 'interviewing', 'offer', 'rejected'] as const;
 
 export type ApplicationStatus = (typeof STATUSES)[number];
+
+export const STATUS_LABELS: Record<ApplicationStatus, string> = {
+  applied: 'Applied',
+  interviewing: 'Interviewing',
+  offer: 'Offer',
+  rejected: 'Rejected'
+};
+
+/** Stages that are still waiting on the company. */
+export const OPEN_STATUSES: ApplicationStatus[] = ['applied', 'interviewing'];
+
+/** Stages that mean the company answered, whatever the answer was. */
+export const ANSWERED_STATUSES: ApplicationStatus[] = ['interviewing', 'offer', 'rejected'];
 
 export type ApplicationInput = {
   company?: unknown;
   title?: unknown;
   dateApplied?: unknown;
   status?: unknown;
-  /** Legacy boolean from the five-field era; `true` maps to status `offer`. */
   receivedOffer?: unknown;
   postingUrl?: unknown;
 };
@@ -26,5 +50,6 @@ export type Application = {
   title: string;
   dateApplied: string;
   status: ApplicationStatus;
+  receivedOffer: boolean;
   postingUrl: string;
 };

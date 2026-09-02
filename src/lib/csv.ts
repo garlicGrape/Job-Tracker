@@ -1,12 +1,11 @@
-import { HEADERS, type Application, type ApplicationStatus } from './types';
+import { HEADERS, STATUS_LABELS, type Application } from './types';
 import {
-  STATUS_LABELS,
   createApplication,
   escapeFormula,
   isValidDate,
   isValidHttpUrl,
   normalizePostingUrl,
-  parseStatus,
+  normalizeStatus,
   toBoolean
 } from './applications';
 
@@ -20,6 +19,8 @@ function csvField(value: string): string {
 /**
  * Serialize applications to CSV. Formula-looking company/title values are
  * prefixed with an apostrophe so Excel / Sheets will not execute them.
+ * `Received Offer` stays in column 4 for older importers; `Status` carries
+ * the full stage.
  */
 export function applicationsToCsv(apps: Application[]): string {
   const lines = [HEADERS.join(',')];
@@ -29,8 +30,9 @@ export function applicationsToCsv(apps: Application[]): string {
         csvField(escapeFormula(app.company)),
         csvField(escapeFormula(app.title)),
         csvField(app.dateApplied),
-        STATUS_LABELS[app.status],
-        csvField(escapeFormula(app.postingUrl))
+        app.receivedOffer ? 'TRUE' : 'FALSE',
+        csvField(escapeFormula(app.postingUrl)),
+        csvField(escapeFormula(STATUS_LABELS[app.status]))
       ].join(',')
     );
   }
@@ -79,91 +81,97 @@ function unescapeImported(value: string): string {
   return trimmed;
 }
 
-/**
- * Read a status from either a "Status" cell (Applied / Interviewing / Offer /
- * Rejected) or the older "Received Offer" cell (TRUE / FALSE). TRUE means an
- * offer; anything unrecognized, including FALSE and blank, means applied.
- */
-export function statusFromCell(value: string): ApplicationStatus {
-  const trimmed = value.trim();
-  if (toBoolean(trimmed)) return 'offer';
-  return parseStatus(trimmed) ?? 'applied';
-}
-
 type ColumnMap = {
   company: number;
   title: number;
   dateApplied: number;
-  status: number;
   receivedOffer: number;
   postingUrl: number;
+  status: number;
 };
 
-/** Positional layout for a file with no header row (or an unknown header). */
-const DEFAULT_COLUMNS: ColumnMap = {
+/** Column order used when a file has no header row. */
+const POSITIONAL_COLUMNS: ColumnMap = {
   company: 0,
   title: 1,
   dateApplied: 2,
-  status: 3,
-  receivedOffer: -1,
-  postingUrl: 4
+  receivedOffer: 3,
+  postingUrl: 4,
+  status: 5
+};
+
+const HEADER_ALIASES: Record<string, keyof ColumnMap> = {
+  company: 'company',
+  employer: 'company',
+  title: 'title',
+  role: 'title',
+  position: 'title',
+  'date applied': 'dateApplied',
+  date: 'dateApplied',
+  applied: 'dateApplied',
+  'received offer': 'receivedOffer',
+  offer: 'receivedOffer',
+  'posting url': 'postingUrl',
+  url: 'postingUrl',
+  link: 'postingUrl',
+  posting: 'postingUrl',
+  status: 'status',
+  stage: 'status',
+  outcome: 'status'
 };
 
 /**
- * Locate columns by header name so exports from either era import, and a
- * reordered sheet still lands in the right fields. Unknown columns are
- * ignored. Returns null when the first row is not a header.
+ * Read a header row into column positions, so a sheet may reorder columns or
+ * omit the ones added later. Returns null when the row is data, not a header.
  */
-function mapColumns(cols: string[]): ColumnMap | null {
+function parseHeader(cols: string[]): ColumnMap | null {
   const names = cols.map((c) => c.trim().toLowerCase());
-  if (names[0] !== 'company' || names[1] !== 'title' || !names.includes('date applied')) {
+  if (names[0] !== 'company' || names[1] !== 'title') {
     return null;
   }
-  const find = (...labels: string[]) => {
-    for (const label of labels) {
-      const idx = names.indexOf(label);
-      if (idx >= 0) return idx;
+  const map: ColumnMap = {
+    company: -1,
+    title: -1,
+    dateApplied: -1,
+    receivedOffer: -1,
+    postingUrl: -1,
+    status: -1
+  };
+  names.forEach((name, index) => {
+    const field = HEADER_ALIASES[name];
+    if (field && map[field] < 0) {
+      map[field] = index;
     }
-    return -1;
-  };
-  return {
-    company: 0,
-    title: 1,
-    dateApplied: find('date applied', 'date'),
-    status: find('status', 'stage'),
-    receivedOffer: find('received offer', 'offer'),
-    postingUrl: find('posting url', 'url', 'link')
-  };
+  });
+  return map;
 }
 
 function cell(cols: string[], index: number): string {
-  return index >= 0 ? (cols[index] ?? '') : '';
+  return index < 0 ? '' : cols[index] ?? '';
 }
 
 /**
  * Parse a CSV produced by this app (or a Google Sheet export with the same
- * headers) into application records. Older exports with a Received Offer
- * column and no Status column still import: TRUE becomes an offer. A sheet
- * without Posting URL leaves that field blank. Invalid rows are skipped.
+ * headers) into application records. Files written before stages existed
+ * still import: `Received Offer` alone decides between offer and applied.
+ * Invalid rows are skipped.
  */
 export function parseApplicationsCsv(text: string): Application[] {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const lines = normalized.split('\n').filter((line) => line.trim() !== '');
   if (lines.length === 0) return [];
 
-  const header = mapColumns(splitCsvLine(lines[0]));
-  const columns = header ?? DEFAULT_COLUMNS;
-  const start = header ? 1 : 0;
+  const header = parseHeader(splitCsvLine(lines[0]));
+  const columns = header ?? POSITIONAL_COLUMNS;
   const apps: Application[] = [];
-  for (let i = start; i < lines.length; i++) {
+  for (let i = header ? 1 : 0; i < lines.length; i++) {
     const cols = splitCsvLine(lines[i]);
     const company = unescapeImported(cell(cols, columns.company));
     const title = unescapeImported(cell(cols, columns.title));
     const dateApplied = cell(cols, columns.dateApplied).trim();
-    const statusCell = cell(cols, columns.status).trim();
-    const status = statusCell
-      ? statusFromCell(statusCell)
-      : statusFromCell(cell(cols, columns.receivedOffer));
+    const receivedOffer = toBoolean(cell(cols, columns.receivedOffer).trim());
+    const rawStatus = unescapeImported(cell(cols, columns.status));
+    const status = normalizeStatus(rawStatus, receivedOffer ? 'offer' : 'applied');
     const normalizedUrl = normalizePostingUrl(unescapeImported(cell(cols, columns.postingUrl)));
     const postingUrl = isValidHttpUrl(normalizedUrl) ? normalizedUrl : '';
     if (!company && !title) continue;

@@ -3,6 +3,7 @@ import {
   addApplication,
   getApplications,
   removeApplication,
+  setOffer,
   setStatus,
   updateApplication
 } from '../src/lib/store';
@@ -25,13 +26,13 @@ describe('reading applications', () => {
       company: 'Acme',
       title: 'Frontend',
       dateApplied: '2026-08-20',
-      status: 'offer'
+      receivedOffer: true
     });
     addApplication(storage, {
       company: 'Globex',
       title: 'Backend',
       dateApplied: '2026-08-25',
-      status: 'applied'
+      receivedOffer: false
     });
     const apps = getApplications(storage);
     expect(apps).toHaveLength(2);
@@ -39,14 +40,14 @@ describe('reading applications', () => {
       company: 'Acme',
       title: 'Frontend',
       dateApplied: '2026-08-20',
-      status: 'offer',
+      receivedOffer: true,
       postingUrl: ''
     });
     expect(apps[1]).toMatchObject({
       company: 'Globex',
       title: 'Backend',
       dateApplied: '2026-08-25',
-      status: 'applied',
+      receivedOffer: false,
       postingUrl: ''
     });
     expect(apps[0].id).not.toBe(apps[1].id);
@@ -61,23 +62,19 @@ describe('reading applications', () => {
   });
 });
 
-describe('setStatus', () => {
-  it('moves the matching application through the pipeline', () => {
+describe('setOffer', () => {
+  it('writes the boolean on the matching application', () => {
     const storage = createMemoryStorage();
     const [first] = addApplication(storage, {
       company: 'Acme',
       title: 'Dev',
       dateApplied: '2026-08-20',
-      status: 'applied'
+      receivedOffer: false
     });
-    setStatus(storage, first.id, 'interviewing');
-    expect(getApplications(storage)[0].status).toBe('interviewing');
-    setStatus(storage, first.id, 'rejected');
-    expect(getApplications(storage)[0].status).toBe('rejected');
-    setStatus(storage, first.id, 'Offer');
-    expect(getApplications(storage)[0].status).toBe('offer');
-    setStatus(storage, first.id, 'applied');
-    expect(getApplications(storage)[0].status).toBe('applied');
+    setOffer(storage, first.id, true);
+    expect(getApplications(storage)[0].receivedOffer).toBe(true);
+    setOffer(storage, first.id, false);
+    expect(getApplications(storage)[0].receivedOffer).toBe(false);
   });
 
   it('does not touch other applications', () => {
@@ -86,33 +83,26 @@ describe('setStatus', () => {
       company: 'Acme',
       title: 'Dev',
       dateApplied: '2026-08-20',
-      status: 'applied'
+      receivedOffer: false
     });
     addApplication(storage, {
       company: 'Globex',
       title: 'PM',
       dateApplied: '2026-08-25',
-      status: 'applied'
+      receivedOffer: false
     });
     const secondId = getApplications(storage)[1].id;
-    setStatus(storage, secondId, 'rejected');
+    setOffer(storage, secondId, true);
     const apps = getApplications(storage);
-    expect(apps.find((a) => a.id === first.id)?.status).toBe('applied');
-    expect(apps.find((a) => a.id === secondId)?.status).toBe('rejected');
+    expect(apps.find((a) => a.id === first.id)?.receivedOffer).toBe(false);
+    expect(apps.find((a) => a.id === secondId)?.receivedOffer).toBe(true);
   });
 
   it('rejects a missing id', () => {
     const storage = createMemoryStorage();
     addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-08-20' });
-    expect(() => setStatus(storage, 'missing-id', 'rejected')).toThrow(/not found/i);
-    expect(() => setStatus(storage, '', 'rejected')).toThrow(/invalid application id/i);
-  });
-
-  it('rejects an unknown status without writing', () => {
-    const storage = createMemoryStorage();
-    const [first] = addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-08-20' });
-    expect(() => setStatus(storage, first.id, 'ghosted')).toThrow(/status must be one of/i);
-    expect(getApplications(storage)[0].status).toBe('applied');
+    expect(() => setOffer(storage, 'missing-id', true)).toThrow(/not found/i);
+    expect(() => setOffer(storage, '', true)).toThrow(/invalid application id/i);
   });
 });
 
@@ -123,13 +113,13 @@ describe('updateApplication', () => {
       company: 'Acme',
       title: 'Dev',
       dateApplied: '2026-08-20',
-      status: 'applied'
+      receivedOffer: false
     });
     const next = updateApplication(storage, first.id, {
       company: 'Acme Inc',
       title: 'Senior Dev',
       dateApplied: '2026-08-21',
-      status: 'offer',
+      receivedOffer: true,
       postingUrl: 'https://jobs.acme.test/senior'
     });
     expect(next).toHaveLength(1);
@@ -138,7 +128,7 @@ describe('updateApplication', () => {
       company: 'Acme Inc',
       title: 'Senior Dev',
       dateApplied: '2026-08-21',
-      status: 'offer',
+      receivedOffer: true,
       postingUrl: 'https://jobs.acme.test/senior'
     });
   });
@@ -231,19 +221,8 @@ describe('removeApplication', () => {
   });
 });
 
-describe('legacy records', () => {
-  it('upgrades a receivedOffer boolean to a status', () => {
-    const storage = createMemoryStorage({
-      'job-tracker.applications': JSON.stringify([
-        { id: 'a', company: 'Acme', title: 'Dev', dateApplied: '2026-08-20', receivedOffer: true },
-        { id: 'b', company: 'Globex', title: 'PM', dateApplied: '2026-08-21', receivedOffer: false },
-        { id: 'c', company: 'Initech', title: 'QA', dateApplied: '2026-08-22', status: 'rejected' }
-      ])
-    });
-    expect(getApplications(storage).map((a) => a.status)).toEqual(['offer', 'applied', 'rejected']);
-  });
-
-  it('loads four-field JSON and defaults postingUrl to empty', () => {
+describe('legacy records without postingUrl or status', () => {
+  it('loads four-field JSON, defaults postingUrl to empty, and derives the stage', () => {
     const storage = createMemoryStorage({
       'job-tracker.applications': JSON.stringify([
         {
@@ -251,7 +230,7 @@ describe('legacy records', () => {
           company: 'Acme',
           title: 'Dev',
           dateApplied: '2026-08-20',
-          status: 'applied'
+          receivedOffer: false
         }
       ])
     });
@@ -262,9 +241,64 @@ describe('legacy records', () => {
         title: 'Dev',
         dateApplied: '2026-08-20',
         status: 'applied',
+        receivedOffer: false,
         postingUrl: ''
       }
     ]);
+  });
+
+  it('reads a legacy offer flag as the offer stage', () => {
+    const storage = createMemoryStorage({
+      'job-tracker.applications': JSON.stringify([
+        {
+          id: 'legacy-2',
+          company: 'Acme',
+          title: 'Dev',
+          dateApplied: '2026-08-20',
+          receivedOffer: true
+        }
+      ])
+    });
+    expect(getApplications(storage)[0].status).toBe('offer');
+  });
+});
+
+describe('setStatus', () => {
+  it('moves one application to rejected and keeps the offer mirror in sync', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-08-20',
+      status: 'offer'
+    });
+    expect(first.receivedOffer).toBe(true);
+    const next = setStatus(storage, first.id, 'rejected');
+    expect(next[0].status).toBe('rejected');
+    expect(next[0].receivedOffer).toBe(false);
+    expect(getApplications(storage)[0].status).toBe('rejected');
+  });
+
+  it('does not touch other applications', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-08-20'
+    });
+    addApplication(storage, { company: 'Globex', title: 'PM', dateApplied: '2026-08-25' });
+    const secondId = getApplications(storage)[1].id;
+    setStatus(storage, secondId, 'interviewing');
+    const apps = getApplications(storage);
+    expect(apps.find((a) => a.id === first.id)?.status).toBe('applied');
+    expect(apps.find((a) => a.id === secondId)?.status).toBe('interviewing');
+  });
+
+  it('rejects a missing id', () => {
+    const storage = createMemoryStorage();
+    addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-08-20' });
+    expect(() => setStatus(storage, 'missing-id', 'rejected')).toThrow(/not found/i);
+    expect(() => setStatus(storage, '', 'rejected')).toThrow(/invalid application id/i);
   });
 });
 

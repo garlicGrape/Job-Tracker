@@ -1,19 +1,15 @@
 import { STORAGE_KEY, type Application, type ApplicationInput, type ApplicationStatus } from './types';
-import { createApplication, isApplicationStatus, isValidHttpUrl, resolveStatus } from './applications';
+import { createApplication, isValidHttpUrl, normalizeStatus, toBoolean } from './applications';
 
 export type KeyValueStorage = {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 };
 
-/**
- * What may be on disk: the current shape, plus older records that carried a
- * `receivedOffer` boolean instead of `status` and/or no `postingUrl`.
- */
-type StoredApplication = Omit<Application, 'postingUrl' | 'status'> & {
+type StoredApplication = Omit<Application, 'postingUrl' | 'status' | 'receivedOffer'> & {
   postingUrl?: string;
-  status?: string;
-  receivedOffer?: boolean;
+  status?: unknown;
+  receivedOffer?: unknown;
 };
 
 function isApplicationRecord(value: unknown): value is StoredApplication {
@@ -24,26 +20,23 @@ function isApplicationRecord(value: unknown): value is StoredApplication {
     typeof rec.company === 'string' &&
     typeof rec.title === 'string' &&
     typeof rec.dateApplied === 'string' &&
-    (rec.status === undefined || typeof rec.status === 'string') &&
-    (rec.receivedOffer === undefined || typeof rec.receivedOffer === 'boolean') &&
-    (rec.status !== undefined || rec.receivedOffer !== undefined) &&
+    (typeof rec.receivedOffer === 'boolean' || typeof rec.status === 'string') &&
     (rec.postingUrl === undefined || typeof rec.postingUrl === 'string')
   );
 }
 
-function upgradeRecord(app: StoredApplication): Application {
+/**
+ * Fill in fields added after a record was written: `postingUrl` and, later,
+ * `status`. A record saved before stages existed is "offer" when its old
+ * offer flag was set and "applied" otherwise.
+ */
+function normalizeStored(app: StoredApplication): Application {
   const postingUrl = app.postingUrl ?? '';
-  const status: ApplicationStatus = isApplicationStatus(app.status)
-    ? app.status
-    : app.receivedOffer
-      ? 'offer'
-      : 'applied';
+  const status = normalizeStatus(app.status, toBoolean(app.receivedOffer) ? 'offer' : 'applied');
   return {
-    id: app.id,
-    company: app.company,
-    title: app.title,
-    dateApplied: app.dateApplied,
+    ...app,
     status,
+    receivedOffer: status === 'offer',
     postingUrl: isValidHttpUrl(postingUrl) ? postingUrl : ''
   };
 }
@@ -54,7 +47,7 @@ export function getApplications(storage: KeyValueStorage): Application[] {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isApplicationRecord).map(upgradeRecord);
+    return parsed.filter(isApplicationRecord).map(normalizeStored);
   } catch {
     return [];
   }
@@ -116,27 +109,37 @@ export function removeApplication(storage: KeyValueStorage, id: string): Applica
 }
 
 /**
- * Move one application to a new pipeline stage (applied, interviewing,
- * offer, rejected). Accepts the same spellings the form and CSV do.
+ * Move one application to a different pipeline stage.
  */
 export function setStatus(
   storage: KeyValueStorage,
   id: string,
-  status: unknown
+  status: ApplicationStatus
 ): Application[] {
   if (!id || typeof id !== 'string') {
     throw new Error('Invalid application id.');
   }
-  const next = resolveStatus(status);
   const apps = getApplications(storage);
   const idx = apps.findIndex((a) => a.id === id);
   if (idx < 0) {
     throw new Error('Application not found.');
   }
-  return persist(
-    storage,
-    apps.map((a, i) => (i === idx ? { ...a, status: next } : a))
+  const next = apps.map((a, i) =>
+    i === idx ? { ...a, status, receivedOffer: status === 'offer' } : a
   );
+  return persist(storage, next);
+}
+
+/**
+ * Toggle the "Received Offer" flag for a specific application id. Kept as a
+ * shorthand for the offer stage; clearing it returns the row to "applied".
+ */
+export function setOffer(
+  storage: KeyValueStorage,
+  id: string,
+  received: unknown
+): Application[] {
+  return setStatus(storage, id, toBoolean(received) ? 'offer' : 'applied');
 }
 
 /**

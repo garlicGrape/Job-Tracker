@@ -1,169 +1,119 @@
 /**
- * Pipeline metrics computed from the listing array. Framework-free and pure:
- * pass `today` as YYYY-MM-DD so the numbers are reproducible in tests and do
- * not drift with the browser's timezone.
+ * Pipeline metrics derived from a list of applications.
+ *
+ * Framework-free and pure: pass the list and the day to measure against, get
+ * numbers back. Everything here is computed from fields the app already
+ * stores (stage + date applied), so no extra columns are needed.
  */
-import { STATUSES, type Application, type ApplicationStatus } from './types';
+import { daysBetween, todayIsoDate } from './applications';
+import {
+  ANSWERED_STATUSES,
+  OPEN_STATUSES,
+  STATUSES,
+  type Application,
+  type ApplicationStatus
+} from './types';
 
-export type WeekBucket = {
-  /** Monday of that calendar week, YYYY-MM-DD. */
-  weekStart: string;
-  count: number;
-};
+export type StatusCounts = Record<ApplicationStatus, number>;
 
-export type PipelineMetrics = {
+export type Metrics = {
   total: number;
-  byStatus: Record<ApplicationStatus, number>;
-  /** Still open: applied + interviewing. */
-  active: number;
-  /** Heard back in any form: interviewing + offer + rejected. */
-  responded: number;
-  responseRate: number | null;
-  /** Reached an interview or further: interviewing + offer. */
-  interviewRate: number | null;
-  offerRate: number | null;
-  rejectionRate: number | null;
-  last7Days: number;
-  last30Days: number;
-  /** Distinct companies, case-insensitive. */
-  companies: number;
-  /** Average applications per week from the first application to today. */
-  perWeek: number | null;
-  /** Days the oldest listing still marked "applied" has waited. */
-  longestWaitingDays: number | null;
-  /** Median days since applied across active listings. */
-  medianActiveDays: number | null;
-  firstApplied: string | null;
-  lastApplied: string | null;
-  /** Oldest week first; the last bucket is the current week. */
-  weekly: WeekBucket[];
+  counts: StatusCounts;
+  /** Still waiting on the company: applied + interviewing. */
+  open: number;
+  /** The company answered: interviewing + offer + rejected. */
+  answered: number;
+  /** Share of all applications that got any answer, 0-100. */
+  responseRate: number;
+  /** Share that reached interviews or better, 0-100. */
+  interviewRate: number;
+  /** Share that ended in an offer, 0-100. */
+  offerRate: number;
+  /** Share that ended in a rejection, 0-100. */
+  rejectionRate: number;
+  appliedLast7Days: number;
+  appliedLast30Days: number;
+  /** Applications per week over the last 30 days, one decimal place. */
+  weeklyPace: number;
+  /** Average age in days of the applications still waiting. */
+  avgOpenAgeDays: number;
+  /** The oldest application still waiting, if any. */
+  longestOpenWait: { days: number; company: string; title: string } | null;
+  distinctCompanies: number;
+  /** Most recent date applied, or '' when the list is empty. */
+  lastAppliedDate: string;
 };
 
-const DAY_MS = 86_400_000;
-
-function toUtc(iso: string): number {
-  const [y, m, d] = iso.split('-').map(Number);
-  return Date.UTC(y, m - 1, d);
+function percent(part: number, whole: number): number {
+  if (whole <= 0) return 0;
+  return Math.round((part / whole) * 100);
 }
 
-function fromUtc(ms: number): string {
-  const date = new Date(ms);
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${date.getUTCFullYear()}-${month}-${day}`;
+function emptyCounts(): StatusCounts {
+  const counts = {} as StatusCounts;
+  for (const status of STATUSES) {
+    counts[status] = 0;
+  }
+  return counts;
 }
 
-/** Whole days from `fromIso` to `toIso`; negative when `toIso` is earlier. */
-export function daysBetween(fromIso: string, toIso: string): number {
-  return Math.round((toUtc(toIso) - toUtc(fromIso)) / DAY_MS);
-}
-
-export function addDays(iso: string, days: number): string {
-  return fromUtc(toUtc(iso) + days * DAY_MS);
-}
-
-/** Monday on or before the given date. */
-export function weekStartOf(iso: string): string {
-  const ms = toUtc(iso);
-  const dow = new Date(ms).getUTCDay(); // 0 = Sunday
-  const back = (dow + 6) % 7;
-  return fromUtc(ms - back * DAY_MS);
-}
-
-function ratio(part: number, whole: number): number | null {
-  return whole === 0 ? null : part / whole;
-}
-
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-export function emptyByStatus(): Record<ApplicationStatus, number> {
-  const out = {} as Record<ApplicationStatus, number>;
-  for (const status of STATUSES) out[status] = 0;
-  return out;
+export function countByStatus(apps: Application[]): StatusCounts {
+  const counts = emptyCounts();
+  for (const app of apps) {
+    counts[app.status] += 1;
+  }
+  return counts;
 }
 
 export function computeMetrics(
   apps: Application[],
-  today: string,
-  weeks: number = 8
-): PipelineMetrics {
-  const byStatus = emptyByStatus();
-  const companies = new Set<string>();
-  let last7Days = 0;
-  let last30Days = 0;
-  let firstApplied: string | null = null;
-  let lastApplied: string | null = null;
-  let longestWaitingDays: number | null = null;
-  const activeAges: number[] = [];
-
-  for (const app of apps) {
-    byStatus[app.status] += 1;
-    companies.add(app.company.trim().toLowerCase());
-    const age = daysBetween(app.dateApplied, today);
-    if (age >= 0 && age < 7) last7Days += 1;
-    if (age >= 0 && age < 30) last30Days += 1;
-    if (firstApplied === null || app.dateApplied < firstApplied) firstApplied = app.dateApplied;
-    if (lastApplied === null || app.dateApplied > lastApplied) lastApplied = app.dateApplied;
-    if (app.status === 'applied' && (longestWaitingDays === null || age > longestWaitingDays)) {
-      longestWaitingDays = age;
-    }
-    if (app.status === 'applied' || app.status === 'interviewing') {
-      activeAges.push(age);
-    }
-  }
-
+  today: string = todayIsoDate()
+): Metrics {
+  const counts = countByStatus(apps);
   const total = apps.length;
-  const active = byStatus.applied + byStatus.interviewing;
-  const responded = byStatus.interviewing + byStatus.offer + byStatus.rejected;
+  const open = OPEN_STATUSES.reduce((sum, status) => sum + counts[status], 0);
+  const answered = ANSWERED_STATUSES.reduce((sum, status) => sum + counts[status], 0);
 
-  let perWeek: number | null = null;
-  if (firstApplied !== null) {
-    const spanDays = Math.max(daysBetween(firstApplied, today), 0) + 1;
-    perWeek = total / (spanDays / 7);
-  }
+  let appliedLast7Days = 0;
+  let appliedLast30Days = 0;
+  let openAgeTotal = 0;
+  let longestOpenWait: Metrics['longestOpenWait'] = null;
+  let lastAppliedDate = '';
+  const companies = new Set<string>();
 
-  const bucketCount = Math.max(1, Math.floor(weeks));
-  const currentWeek = weekStartOf(today);
-  const weekly: WeekBucket[] = [];
-  for (let i = bucketCount - 1; i >= 0; i--) {
-    weekly.push({ weekStart: addDays(currentWeek, -7 * i), count: 0 });
-  }
-  const firstBucket = weekly[0].weekStart;
-  const afterLast = addDays(currentWeek, 7);
   for (const app of apps) {
-    if (app.dateApplied < firstBucket || app.dateApplied >= afterLast) continue;
-    const idx = Math.floor(daysBetween(firstBucket, app.dateApplied) / 7);
-    weekly[idx].count += 1;
+    companies.add(app.company.trim().toLowerCase());
+    if (app.dateApplied > lastAppliedDate) {
+      lastAppliedDate = app.dateApplied;
+    }
+    // Negative ages come from dates in the future; they are not "recent".
+    const age = daysBetween(app.dateApplied, today);
+    if (age >= 0 && age < 7) appliedLast7Days += 1;
+    if (age >= 0 && age < 30) appliedLast30Days += 1;
+    if (OPEN_STATUSES.includes(app.status)) {
+      const waited = Math.max(0, age);
+      openAgeTotal += waited;
+      if (!longestOpenWait || waited > longestOpenWait.days) {
+        longestOpenWait = { days: waited, company: app.company, title: app.title };
+      }
+    }
   }
 
   return {
     total,
-    byStatus,
-    active,
-    responded,
-    responseRate: ratio(responded, total),
-    interviewRate: ratio(byStatus.interviewing + byStatus.offer, total),
-    offerRate: ratio(byStatus.offer, total),
-    rejectionRate: ratio(byStatus.rejected, total),
-    last7Days,
-    last30Days,
-    companies: companies.size,
-    perWeek,
-    longestWaitingDays,
-    medianActiveDays: median(activeAges),
-    firstApplied,
-    lastApplied,
-    weekly
+    counts,
+    open,
+    answered,
+    responseRate: percent(answered, total),
+    interviewRate: percent(counts.interviewing + counts.offer, total),
+    offerRate: percent(counts.offer, total),
+    rejectionRate: percent(counts.rejected, total),
+    appliedLast7Days,
+    appliedLast30Days,
+    weeklyPace: Math.round((appliedLast30Days / 30) * 7 * 10) / 10,
+    avgOpenAgeDays: open > 0 ? Math.round(openAgeTotal / open) : 0,
+    longestOpenWait,
+    distinctCompanies: companies.size,
+    lastAppliedDate
   };
-}
-
-/** "42%" for 0.42; an em dash when there is nothing to divide. */
-export function formatPercent(rate: number | null): string {
-  if (rate === null) return '—';
-  return `${Math.round(rate * 100)}%`;
 }

@@ -1,106 +1,211 @@
 import { describe, it, expect } from 'vitest';
 import {
-  isSortKey,
+  SORT_OPTIONS,
+  STATUS_FILTERS,
+  STATUS_FILTER_LABELS,
+  filterApplications,
+  groupByStatus,
+  isOpen,
   matchesQuery,
-  matchesStatus,
+  matchesStatusFilter,
   organizeApplications,
   sortApplications
 } from '../src/lib/organize';
-import type { Application, ApplicationStatus } from '../src/lib/types';
+import { createApplication } from '../src/lib/applications';
+import type { Application, ApplicationInput } from '../src/lib/types';
 
-function app(
-  id: string,
-  company: string,
-  dateApplied: string,
-  status: ApplicationStatus = 'applied',
-  title = 'Dev'
-): Application {
-  return { id, company, title, dateApplied, status, postingUrl: '' };
+let seq = 0;
+function app(input: ApplicationInput) {
+  return createApplication(input, 'id-' + ++seq);
 }
 
-const APPS: Application[] = [
-  app('1', 'Acme', '2026-08-20', 'applied', 'Frontend Engineer'),
-  app('2', 'globex', '2026-08-25', 'rejected', 'Backend Engineer'),
-  app('3', 'Initech', '2026-08-25', 'interviewing', 'Data Analyst'),
-  app('4', 'Umbrella', '2026-07-01', 'offer', 'Analyst')
-];
+function sample(): Application[] {
+  return [
+    app({
+      company: 'Globex',
+      title: 'Backend Engineer',
+      dateApplied: '2026-01-05',
+      postingUrl: 'https://jobs.globex.test/backend'
+    }),
+    app({ company: 'acme', title: 'Frontend Engineer', dateApplied: '2026-02-20' }),
+    app({ company: 'Initech', title: 'Data Analyst', dateApplied: '2026-02-01', status: 'interviewing' }),
+    app({ company: 'Hooli', title: 'Staff Engineer', dateApplied: '2026-01-20', status: 'offer' }),
+    app({ company: 'Umbrella', title: 'Site Reliability', dateApplied: '2026-02-10', status: 'rejected' })
+  ];
+}
 
-describe('matchesQuery', () => {
-  it('matches company or title, case-insensitively, and blank matches all', () => {
-    expect(matchesQuery(APPS[0], 'acme')).toBe(true);
-    expect(matchesQuery(APPS[0], 'FRONT')).toBe(true);
-    expect(matchesQuery(APPS[0], 'backend')).toBe(false);
-    expect(matchesQuery(APPS[0], '')).toBe(true);
-    expect(matchesQuery(APPS[0], '   ')).toBe(true);
-    expect(matchesQuery(APPS[0], undefined)).toBe(true);
+const companies = (apps: Application[]) => apps.map((a) => a.company);
+
+describe('filter options', () => {
+  it('exposes every stage plus the all and open views', () => {
+    expect(STATUS_FILTERS).toEqual(['all', 'open', 'applied', 'interviewing', 'offer', 'rejected']);
+    for (const filter of STATUS_FILTERS) {
+      expect(STATUS_FILTER_LABELS[filter]).toBeTruthy();
+    }
+    expect(SORT_OPTIONS.map((o) => o.value)).toEqual([
+      'newest',
+      'oldest',
+      'stage',
+      'company',
+      'title'
+    ]);
   });
 });
 
-describe('matchesStatus', () => {
-  it('handles all, active, and a single status', () => {
-    expect(APPS.filter((a) => matchesStatus(a, 'all')).map((a) => a.id)).toEqual(['1', '2', '3', '4']);
-    expect(APPS.filter((a) => matchesStatus(a, undefined)).map((a) => a.id)).toEqual(['1', '2', '3', '4']);
-    expect(APPS.filter((a) => matchesStatus(a, 'active')).map((a) => a.id)).toEqual(['1', '3']);
-    expect(APPS.filter((a) => matchesStatus(a, 'rejected')).map((a) => a.id)).toEqual(['2']);
-    expect(APPS.filter((a) => matchesStatus(a, 'offer')).map((a) => a.id)).toEqual(['4']);
+describe('filtering', () => {
+  it('treats applied and interviewing as open', () => {
+    const apps = sample();
+    expect(apps.filter(isOpen).map((a) => a.status)).toEqual([
+      'applied',
+      'applied',
+      'interviewing'
+    ]);
+  });
+
+  it('keeps everything under the all filter', () => {
+    expect(filterApplications(sample(), { status: 'all' })).toHaveLength(5);
+    expect(filterApplications(sample())).toHaveLength(5);
+  });
+
+  it('narrows to a single stage', () => {
+    expect(companies(filterApplications(sample(), { status: 'rejected' }))).toEqual(['Umbrella']);
+    expect(companies(filterApplications(sample(), { status: 'offer' }))).toEqual(['Hooli']);
+    expect(companies(filterApplications(sample(), { status: 'open' }))).toEqual([
+      'Globex',
+      'acme',
+      'Initech'
+    ]);
+  });
+
+  it('matches a query against company, title, URL, and stage label', () => {
+    const [globex, acme, initech, hooli, umbrella] = sample();
+    expect(matchesQuery(acme, 'ACME')).toBe(true);
+    expect(matchesQuery(acme, 'front')).toBe(true);
+    expect(matchesQuery(globex, 'jobs.globex.test')).toBe(true);
+    expect(matchesQuery(umbrella, 'reject')).toBe(true);
+    expect(matchesQuery(hooli, 'offer')).toBe(true);
+    expect(matchesQuery(initech, 'nothing here')).toBe(false);
+    expect(matchesQuery(initech, '   ')).toBe(true);
+  });
+
+  it('does not match across two fields by accident', () => {
+    const [globex] = sample();
+    expect(matchesQuery(globex, 'Globex Backend')).toBe(false);
+  });
+
+  it('combines a query with a stage filter', () => {
+    const apps = sample();
+    expect(companies(filterApplications(apps, { query: 'engineer', status: 'open' }))).toEqual([
+      'Globex',
+      'acme'
+    ]);
+    expect(filterApplications(apps, { query: 'engineer', status: 'rejected' })).toEqual([]);
+  });
+
+  it('honors a single-stage filter check', () => {
+    const [globex] = sample();
+    expect(matchesStatusFilter(globex, 'applied')).toBe(true);
+    expect(matchesStatusFilter(globex, 'open')).toBe(true);
+    expect(matchesStatusFilter(globex, 'rejected')).toBe(false);
   });
 });
 
-describe('sortApplications', () => {
-  it('sorts newest first by default, breaking ties by company', () => {
-    expect(sortApplications(APPS).map((a) => a.id)).toEqual(['2', '3', '1', '4']);
-  });
-
-  it('sorts oldest first', () => {
-    expect(sortApplications(APPS, 'oldest').map((a) => a.id)).toEqual(['4', '1', '2', '3']);
-  });
-
-  it('sorts by company ignoring case', () => {
-    expect(sortApplications(APPS, 'company').map((a) => a.company)).toEqual([
-      'Acme',
-      'globex',
+describe('sorting', () => {
+  it('puts the newest application first by default', () => {
+    expect(companies(sortApplications(sample()))).toEqual([
+      'acme',
+      'Umbrella',
       'Initech',
+      'Hooli',
+      'Globex'
+    ]);
+  });
+
+  it('reverses for oldest first', () => {
+    expect(companies(sortApplications(sample(), 'oldest'))).toEqual([
+      'Globex',
+      'Hooli',
+      'Initech',
+      'Umbrella',
+      'acme'
+    ]);
+  });
+
+  it('sorts company and title case-insensitively', () => {
+    expect(companies(sortApplications(sample(), 'company'))).toEqual([
+      'acme',
+      'Globex',
+      'Hooli',
+      'Initech',
+      'Umbrella'
+    ]);
+    expect(sortApplications(sample(), 'title').map((a) => a.title)).toEqual([
+      'Backend Engineer',
+      'Data Analyst',
+      'Frontend Engineer',
+      'Site Reliability',
+      'Staff Engineer'
+    ]);
+  });
+
+  it('orders by stage with the most promising first, newest within a stage', () => {
+    expect(companies(sortApplications(sample(), 'stage'))).toEqual([
+      'Hooli',
+      'Initech',
+      'acme',
+      'Globex',
       'Umbrella'
     ]);
   });
 
-  it('sorts by pipeline stage: offer, interviewing, applied, rejected', () => {
-    expect(sortApplications(APPS, 'status').map((a) => a.status)).toEqual([
-      'offer',
-      'interviewing',
-      'applied',
-      'rejected'
-    ]);
+  it('never mutates the input list', () => {
+    const apps = sample();
+    const before = companies(apps);
+    sortApplications(apps, 'company');
+    sortApplications(apps, 'stage');
+    expect(companies(apps)).toEqual(before);
   });
 
-  it('does not mutate the input', () => {
-    const copy = [...APPS];
-    sortApplications(APPS, 'oldest');
-    expect(APPS).toEqual(copy);
+  it('breaks a date tie by company', () => {
+    const tied = [
+      app({ company: 'Zeta', title: 'Dev', dateApplied: '2026-01-01' }),
+      app({ company: 'Alpha', title: 'Dev', dateApplied: '2026-01-01' })
+    ];
+    expect(companies(sortApplications(tied))).toEqual(['Alpha', 'Zeta']);
+  });
+});
+
+describe('grouping', () => {
+  it('buckets by stage in pipeline order and drops empty stages', () => {
+    const groups = groupByStatus(sample());
+    expect(groups.map((g) => g.status)).toEqual(['applied', 'interviewing', 'offer', 'rejected']);
+    expect(groups.map((g) => g.items.length)).toEqual([2, 1, 1, 1]);
+    expect(groups[0].label).toBe('Applied');
+
+    const onlyRejected = groupByStatus([
+      app({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01', status: 'rejected' })
+    ]);
+    expect(onlyRejected.map((g) => g.status)).toEqual(['rejected']);
+    expect(groupByStatus([])).toEqual([]);
+  });
+
+  it('keeps the incoming order inside a group', () => {
+    const groups = groupByStatus(sortApplications(sample(), 'newest'));
+    expect(companies(groups[0].items)).toEqual(['acme', 'Globex']);
   });
 });
 
 describe('organizeApplications', () => {
-  it('filters then sorts', () => {
-    const result = organizeApplications(APPS, { query: 'engineer', status: 'all', sort: 'oldest' });
-    expect(result.map((a) => a.id)).toEqual(['1', '2']);
+  it('filters and sorts in one pass', () => {
+    expect(companies(organizeApplications(sample(), { status: 'open', sort: 'oldest' }))).toEqual([
+      'Globex',
+      'Initech',
+      'acme'
+    ]);
   });
 
-  it('combines a status filter with a search', () => {
-    expect(organizeApplications(APPS, { query: 'analyst', status: 'active' }).map((a) => a.id)).toEqual(['3']);
-    expect(organizeApplications(APPS, { query: 'nothing', status: 'all' })).toEqual([]);
-  });
-
-  it('defaults to every listing, newest first', () => {
-    expect(organizeApplications(APPS).map((a) => a.id)).toEqual(['2', '3', '1', '4']);
-  });
-});
-
-describe('isSortKey', () => {
-  it('guards select values from the UI', () => {
-    expect(isSortKey('newest')).toBe(true);
-    expect(isSortKey('status')).toBe(true);
-    expect(isSortKey('random')).toBe(false);
-    expect(isSortKey(undefined)).toBe(false);
+  it('returns everything, newest first, with no options', () => {
+    expect(organizeApplications(sample())).toHaveLength(5);
+    expect(organizeApplications(sample())[0].company).toBe('acme');
   });
 });
