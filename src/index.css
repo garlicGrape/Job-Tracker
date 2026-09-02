@@ -730,6 +730,13 @@ button.linkish.danger-text {
   border-color: var(--interviewing);
 }
 
+/* Follow-up is a view over open listings, not a stage, so it borrows the
+   waiting color rather than any single stage's. */
+.chip.is-active.is-followup {
+  background: var(--waiting);
+  border-color: var(--waiting);
+}
+
 .organizer-controls {
   display: flex;
   gap: 8px;
@@ -856,6 +863,22 @@ td:last-child {
   margin-top: 2px;
   font-size: 11px;
   color: var(--muted);
+}
+
+/* Marks a row that has been open long enough to be worth chasing. The word
+   itself carries the meaning, so the color is reinforcement, not the signal. */
+.cell-flag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--waiting-soft);
+  color: var(--waiting);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .muted {

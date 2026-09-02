@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { addDays, computeMetrics, countByStatus, weekStartOf, weeklyActivity } from '../src/lib/metrics';
+import {
+  FOLLOW_UP_DAYS,
+  addDays,
+  computeMetrics,
+  countByStatus,
+  daysWaiting,
+  needsFollowUp,
+  weekStartOf,
+  weeklyActivity
+} from '../src/lib/metrics';
 import { createApplication, daysBetween, todayIsoDate } from '../src/lib/applications';
 import type { ApplicationInput } from '../src/lib/types';
 
@@ -138,6 +147,7 @@ describe('computeMetrics', () => {
       weeklyPace: 0,
       avgOpenAgeDays: 0,
       longestOpenWait: null,
+      followUpCount: 0,
       distinctCompanies: 0,
       lastAppliedDate: ''
     });
@@ -190,5 +200,55 @@ describe('weeklyActivity', () => {
 
   it('never returns fewer than one bucket', () => {
     expect(weeklyActivity([], '2026-09-02', 0)).toHaveLength(1);
+  });
+});
+
+describe('follow-ups', () => {
+  it('counts days waiting and never goes negative on a future date', () => {
+    expect(daysWaiting(app({ company: 'A', title: 'Dev', dateApplied: '2026-02-15' }), TODAY)).toBe(14);
+    expect(daysWaiting(app({ company: 'B', title: 'Dev', dateApplied: TODAY }), TODAY)).toBe(0);
+    expect(daysWaiting(app({ company: 'C', title: 'Dev', dateApplied: '2026-03-20' }), TODAY)).toBe(0);
+  });
+
+  it('flags an open listing on the threshold day, not the day before', () => {
+    const eve = app({ company: 'A', title: 'Dev', dateApplied: addDays(TODAY, -(FOLLOW_UP_DAYS - 1)) });
+    const due = app({ company: 'B', title: 'Dev', dateApplied: addDays(TODAY, -FOLLOW_UP_DAYS) });
+    expect(needsFollowUp(eve, TODAY)).toBe(false);
+    expect(needsFollowUp(due, TODAY)).toBe(true);
+  });
+
+  it('never flags a stage the company already answered', () => {
+    const old = '2025-01-01';
+    expect(needsFollowUp(app({ company: 'A', title: 'Dev', dateApplied: old }), TODAY)).toBe(true);
+    expect(
+      needsFollowUp(app({ company: 'B', title: 'Dev', dateApplied: old, status: 'interviewing' }), TODAY)
+    ).toBe(true);
+    expect(
+      needsFollowUp(app({ company: 'C', title: 'Dev', dateApplied: old, status: 'offer' }), TODAY)
+    ).toBe(false);
+    expect(
+      needsFollowUp(app({ company: 'D', title: 'Dev', dateApplied: old, status: 'rejected' }), TODAY)
+    ).toBe(false);
+  });
+
+  it('honors a custom threshold', () => {
+    const waited = app({ company: 'A', title: 'Dev', dateApplied: '2026-02-25' }); // 4 days
+    expect(needsFollowUp(waited, TODAY, 3)).toBe(true);
+    expect(needsFollowUp(waited, TODAY, 5)).toBe(false);
+  });
+
+  it('reports the same count through computeMetrics', () => {
+    // Globex applied 2026-01-01 and is still open; Initech has been
+    // interviewing only 9 days, and the offer and rejections never count.
+    expect(computeMetrics(pipeline(), TODAY).followUpCount).toBe(1);
+    expect(computeMetrics([], TODAY).followUpCount).toBe(0);
+    expect(pipeline().filter((a) => needsFollowUp(a, TODAY))).toHaveLength(1);
+  });
+
+  it('defaults to today when no day is given', () => {
+    expect(needsFollowUp(app({ company: 'A', title: 'Dev', dateApplied: todayIsoDate() }))).toBe(
+      false
+    );
+    expect(daysWaiting(app({ company: 'B', title: 'Dev', dateApplied: todayIsoDate() }))).toBe(0);
   });
 });

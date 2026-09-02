@@ -16,6 +16,33 @@ import {
 
 export type StatusCounts = Record<ApplicationStatus, number>;
 
+/**
+ * How long an open application may sit before it is worth chasing. Two weeks
+ * is the point where most pipelines have either moved or gone quiet, and it
+ * is the default everywhere staleness is asked about.
+ */
+export const FOLLOW_UP_DAYS = 14;
+
+/**
+ * Whole days an application has been waiting. Future dates count as 0 rather
+ * than negative, so a listing entered ahead of time is never "overdue".
+ */
+export function daysWaiting(app: Application, today: string = todayIsoDate()): number {
+  return Math.max(0, daysBetween(app.dateApplied, today));
+}
+
+/**
+ * True when a listing is still open and has waited past the threshold. Closed
+ * stages (offer, rejected) are never stale: the company already answered.
+ */
+export function needsFollowUp(
+  app: Application,
+  today: string = todayIsoDate(),
+  afterDays: number = FOLLOW_UP_DAYS
+): boolean {
+  return OPEN_STATUSES.includes(app.status) && daysWaiting(app, today) >= afterDays;
+}
+
 export type WeekBucket = {
   /** Monday of that calendar week, YYYY-MM-DD. */
   weekStart: string;
@@ -45,6 +72,8 @@ export type Metrics = {
   avgOpenAgeDays: number;
   /** The oldest application still waiting, if any. */
   longestOpenWait: { days: number; company: string; title: string } | null;
+  /** Open applications that have waited past FOLLOW_UP_DAYS. */
+  followUpCount: number;
   distinctCompanies: number;
   /** Most recent date applied, or '' when the list is empty. */
   lastAppliedDate: string;
@@ -83,6 +112,7 @@ export function computeMetrics(
   let appliedLast7Days = 0;
   let appliedLast30Days = 0;
   let openAgeTotal = 0;
+  let followUpCount = 0;
   let longestOpenWait: Metrics['longestOpenWait'] = null;
   let lastAppliedDate = '';
   const companies = new Set<string>();
@@ -99,6 +129,9 @@ export function computeMetrics(
     if (OPEN_STATUSES.includes(app.status)) {
       const waited = Math.max(0, age);
       openAgeTotal += waited;
+      if (waited >= FOLLOW_UP_DAYS) {
+        followUpCount += 1;
+      }
       if (!longestOpenWait || waited > longestOpenWait.days) {
         longestOpenWait = { days: waited, company: app.company, title: app.title };
       }
@@ -119,6 +152,7 @@ export function computeMetrics(
     weeklyPace: Math.round((appliedLast30Days / 30) * 7 * 10) / 10,
     avgOpenAgeDays: open > 0 ? Math.round(openAgeTotal / open) : 0,
     longestOpenWait,
+    followUpCount,
     distinctCompanies: companies.size,
     lastAppliedDate
   };

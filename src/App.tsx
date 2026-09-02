@@ -3,7 +3,8 @@ import { createAccountApiFromConfig, type AccountApi, type PublicUser } from './
 import { loadSupabaseConfig } from './lib/supabase-config';
 import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv';
 import { LIMITS, assertCsvByteSize, daysBetween, todayIsoDate } from './lib/applications';
-import { computeMetrics, weeklyActivity } from './lib/metrics';
+import { findDuplicate, planImport } from './lib/dedupe';
+import { FOLLOW_UP_DAYS, computeMetrics, needsFollowUp, weeklyActivity } from './lib/metrics';
 import {
   SORT_OPTIONS,
   STATUS_FILTERS,
@@ -140,7 +141,17 @@ function ApplicationsTable({
             <td data-label="Date applied">
               <span className="cell-stack">
                 <time dateTime={app.dateApplied}>{formatDisplayDate(app.dateApplied)}</time>
-                <span className="cell-sub">{formatAge(app.dateApplied, today)}</span>
+                <span className="cell-sub">
+                  {formatAge(app.dateApplied, today)}
+                  {needsFollowUp(app, today) ? (
+                    <span
+                      className="cell-flag"
+                      title={`Open for ${FOLLOW_UP_DAYS}+ days with no answer`}
+                    >
+                      Follow up
+                    </span>
+                  ) : null}
+                </span>
               </span>
             </td>
             <td data-label="Stage">
@@ -231,6 +242,9 @@ export default function App() {
   const [postingUrl, setPostingUrl] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  // The listing key a duplicate warning has already been shown for, so a
+  // second click on Add saves the copy on purpose rather than being blocked.
+  const [duplicateAck, setDuplicateAck] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [sort, setSort] = useState<SortKey>('newest');
@@ -303,8 +317,8 @@ export default function App() {
   );
   const weeklyMax = Math.max(1, ...weekly.map((week) => week.count));
   const organized = useMemo(
-    () => organizeApplications(applications, { query, status: statusFilter, sort }),
-    [applications, query, statusFilter, sort]
+    () => organizeApplications(applications, { query, status: statusFilter, sort, today }),
+    [applications, query, statusFilter, sort, today]
   );
   const shown = Math.min(visibleCount, organized.length);
   const visibleApplications = organized.slice(0, shown);
@@ -317,6 +331,7 @@ export default function App() {
   function filterCount(filter: StatusFilter): number {
     if (filter === 'all') return applications.length;
     if (filter === 'open') return metrics.open;
+    if (filter === 'followup') return metrics.followUpCount;
     return metrics.counts[filter];
   }
 
@@ -327,6 +342,7 @@ export default function App() {
     setFormStatus('applied');
     setPostingUrl('');
     setEditingId(null);
+    setDuplicateAck(null);
   }
 
   async function onAuth(event: FormEvent) {
@@ -380,15 +396,33 @@ export default function App() {
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (!api) return;
+    const payload = {
+      company,
+      title,
+      dateApplied,
+      status: formStatus,
+      postingUrl
+    };
+
+    // Warn once before saving a second copy of a listing already tracked.
+    // The acknowledgement names the row it was given for, so changing the
+    // form until it collides with a different listing asks again instead of
+    // carrying the approval over.
+    const twin = findDuplicate(applications, payload, editingId);
+    const twinKey = twin ? twin.id : null;
+    if (twin && duplicateAck !== twinKey) {
+      setDuplicateAck(twinKey);
+      setMessage({
+        text: `Already tracked: ${twin.company} — ${twin.title} on ${formatDisplayDate(
+          twin.dateApplied
+        )}. Submit again to save it anyway.`,
+        kind: 'error'
+      });
+      return;
+    }
+
     setBusy(true);
     try {
-      const payload = {
-        company,
-        title,
-        dateApplied,
-        status: formStatus,
-        postingUrl
-      };
       const wasEditing = Boolean(editingId);
       const next = editingId ? await api.update(editingId, payload) : await api.add(payload);
       setApplications(next);
@@ -413,6 +447,7 @@ export default function App() {
     setFormStatus(app.status);
     setPostingUrl(app.postingUrl);
     setPendingDeleteId(null);
+    setDuplicateAck(null);
     setMessage({ text: '', kind: '' });
     formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -450,6 +485,9 @@ export default function App() {
 
   async function onChangeStatus(id: string, status: ApplicationStatus) {
     if (!api) return;
+    // Hold the busy lock for the round trip: two stage writes racing on one
+    // row would each re-list, and the slower reply would win.
+    setBusy(true);
     try {
       setApplications(await api.setStatus(id, status));
       if (editingId === id) {
@@ -461,13 +499,23 @@ export default function App() {
         text: err instanceof Error ? err.message : 'Could not update the stage.',
         kind: 'error'
       });
+    } finally {
+      setBusy(false);
     }
   }
 
+  /**
+   * Export what the current search and stage filter select — every match, not
+   * just the chunk rendered so far. The button names that count, so a partial
+   * export is never a surprise; with no filter on it is the whole account.
+   */
   function onExport() {
-    const csv = applicationsToCsv(applications);
-    downloadCsv(`job-applications-${todayIsoDate()}.csv`, csv);
-    setMessage({ text: 'CSV downloaded.', kind: 'success' });
+    const rows = filtering ? organized : applications;
+    downloadCsv(`job-applications-${todayIsoDate()}.csv`, applicationsToCsv(rows));
+    setMessage({
+      text: `Exported ${rows.length} listing${rows.length === 1 ? '' : 's'}.`,
+      kind: 'success'
+    });
   }
 
   function onImportFile(file: File) {
@@ -481,8 +529,12 @@ export default function App() {
       return;
     }
     const reader = new FileReader();
+    reader.onerror = () => {
+      setMessage({ text: 'Could not read that file.', kind: 'error' });
+    };
     reader.onload = () => {
       void (async () => {
+        setBusy(true);
         try {
           const text = typeof reader.result === 'string' ? reader.result : '';
           const imported = parseApplicationsCsv(text);
@@ -492,10 +544,22 @@ export default function App() {
           if (!api) {
             throw new Error('Supabase is not configured.');
           }
-          const next = await api.addMany(imported);
+          // Re-importing a backup is the normal case, so write only what the
+          // account does not already have. Parsed rows carry fresh ids, so
+          // nothing downstream would catch the copies.
+          const plan = planImport(imported, applications);
+          if (plan.fresh.length === 0) {
+            throw new Error(
+              `Every row in that CSV is already tracked (${plan.skipped} skipped).`
+            );
+          }
+          const next = await api.addMany(plan.fresh);
           setApplications(next);
+          const added = `Imported ${plan.fresh.length} application${
+            plan.fresh.length === 1 ? '' : 's'
+          }`;
           setMessage({
-            text: `Imported ${imported.length} application${imported.length === 1 ? '' : 's'}.`,
+            text: plan.skipped > 0 ? `${added} · skipped ${plan.skipped} already tracked.` : `${added}.`,
             kind: 'success'
           });
         } catch (err) {
@@ -503,6 +567,8 @@ export default function App() {
             text: err instanceof Error ? err.message : 'Could not import CSV.',
             kind: 'error'
           });
+        } finally {
+          setBusy(false);
         }
       })();
     };
@@ -557,6 +623,15 @@ export default function App() {
       hint: metrics.longestOpenWait
         ? `Longest ${metrics.longestOpenWait.days}d · ${metrics.longestOpenWait.company}`
         : 'Nothing open'
+    },
+    {
+      key: 'followup',
+      value: metrics.followUpCount,
+      label: 'Follow up',
+      hint:
+        metrics.followUpCount > 0
+          ? `Open ${FOLLOW_UP_DAYS}+ days with no answer`
+          : 'Nothing has gone quiet'
     },
     {
       key: 'companies',
@@ -938,7 +1013,12 @@ export default function App() {
                     e.target.value = '';
                   }}
                 />
-                <button type="button" className="secondary" onClick={() => fileRef.current?.click()}>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={busy}
+                >
                   Import CSV
                 </button>
                 <button
@@ -947,7 +1027,9 @@ export default function App() {
                   onClick={onExport}
                   disabled={applications.length === 0}
                 >
-                  Export CSV
+                  {filtering && organized.length !== applications.length
+                    ? `Export ${organized.length} matching`
+                    : 'Export CSV'}
                 </button>
               </div>
             </div>

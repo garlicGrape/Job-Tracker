@@ -5,6 +5,8 @@
  * React layer can treat the account's full list as read-only and keep the
  * organizing rules unit-tested.
  */
+import { todayIsoDate } from './applications';
+import { needsFollowUp } from './metrics';
 import {
   OPEN_STATUSES,
   STATUSES,
@@ -13,14 +15,18 @@ import {
   type ApplicationStatus
 } from './types';
 
-/** `all` and `open` are views across stages; the rest are single stages. */
-export type StatusFilter = 'all' | 'open' | ApplicationStatus;
+/**
+ * `all`, `open`, and `followup` are views across stages; the rest are single
+ * stages. `followup` is the only one that depends on what day it is.
+ */
+export type StatusFilter = 'all' | 'open' | 'followup' | ApplicationStatus;
 
-export const STATUS_FILTERS: readonly StatusFilter[] = ['all', 'open', ...STATUSES];
+export const STATUS_FILTERS: readonly StatusFilter[] = ['all', 'open', 'followup', ...STATUSES];
 
 export const STATUS_FILTER_LABELS: Record<StatusFilter, string> = {
   all: 'All',
   open: 'Open',
+  followup: 'Follow up',
   ...STATUS_LABELS
 };
 
@@ -46,6 +52,8 @@ export type OrganizeOptions = {
   query?: string;
   status?: StatusFilter;
   sort?: SortKey;
+  /** Reference day for the `followup` filter. Defaults to today. */
+  today?: string;
 };
 
 export type StatusGroup = {
@@ -58,32 +66,42 @@ export function isOpen(app: Application): boolean {
   return OPEN_STATUSES.includes(app.status);
 }
 
-export function matchesStatusFilter(app: Application, filter: StatusFilter): boolean {
+export function matchesStatusFilter(
+  app: Application,
+  filter: StatusFilter,
+  today: string = todayIsoDate()
+): boolean {
   if (filter === 'all') return true;
   if (filter === 'open') return isOpen(app);
+  if (filter === 'followup') return needsFollowUp(app, today);
   return app.status === filter;
 }
 
 /**
- * Case-insensitive substring match over company, title, posting URL, and the
- * stage label, so typing "reject" or "acme" both work.
+ * Case-insensitive match over company, title, posting URL, and the stage
+ * label. Whitespace separates terms and every term must appear somewhere in
+ * the row, so "acme senior" finds Acme / Senior Engineer even though the
+ * words sit in different fields and in the other order.
  */
 export function matchesQuery(app: Application, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return true;
-  return [app.company, app.title, app.postingUrl, STATUS_LABELS[app.status]]
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const haystack = [app.company, app.title, app.postingUrl, STATUS_LABELS[app.status]]
     .join(' \u0000 ')
-    .toLowerCase()
-    .includes(needle);
+    .toLowerCase();
+  return terms.every((term) => haystack.includes(term));
 }
 
 export function filterApplications(
   apps: Application[],
-  options: { query?: string; status?: StatusFilter } = {}
+  options: { query?: string; status?: StatusFilter; today?: string } = {}
 ): Application[] {
   const query = options.query ?? '';
   const status = options.status ?? 'all';
-  return apps.filter((app) => matchesStatusFilter(app, status) && matchesQuery(app, query));
+  const today = options.today ?? todayIsoDate();
+  return apps.filter(
+    (app) => matchesStatusFilter(app, status, today) && matchesQuery(app, query)
+  );
 }
 
 function compareText(a: string, b: string): number {

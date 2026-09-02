@@ -10,6 +10,7 @@ export, not the database. It is not a Google Apps Script project.
 - `src/lib/applications.ts` — validation, dates, stages, formula escaping, abuse limits.
 - `src/lib/metrics.ts` — pipeline metrics. Pure; takes the list and "today".
 - `src/lib/organize.ts` — search / filter / sort / group. Pure and non-mutating.
+- `src/lib/dedupe.ts` — duplicate key (company + title + date) for import and the form.
 - `src/lib/supabase-account.ts` — injected Supabase client; Auth + `applications`. Reads are paged.
 - `src/lib/supabase-config.ts` — publishable-key parsing; runtime `config.json`.
 - `src/lib/store.ts` — `{ getItem, setItem }` helpers used by unit tests.
@@ -47,6 +48,11 @@ export, not the database. It is not a Google Apps Script project.
   20,000 per hour), which hold at any table size. `LIMITS` in
   `src/lib/applications.ts` and `supabase/schema.sql` must stay in sync, and
   `list()` must stay paged.
+- **CSV import appends only what the account does not already hold.** Parsed
+  rows always carry fresh ids, so nothing downstream catches a re-imported
+  backup; `planImport` is what stops it from doubling every listing. Identity
+  is `duplicateKey` (company + title + date, case- and whitespace-folded), and
+  the form's duplicate warning must use the same key so the two agree.
 - **Never edit `test/harness.ts` to make a test pass.** Fix `src/lib` instead.
 - `npm test` is the gate. **Do not open a PR on red.** Tests must not need a
   live Supabase project (use a fake client).
