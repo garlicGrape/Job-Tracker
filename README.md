@@ -5,8 +5,9 @@ password; job listings persist in **your Supabase Postgres database**, private
 to that account via row-level security.
 
 Five fields — **Company**, **Title**, **Date Applied**, **Stage**, **Posting
-URL** — plus search / filter / sort / grouping, pipeline metrics, and CSV
-export/import as a personal backup.
+URL** — plus search / filter / sort / grouping, pipeline metrics, follow-up
+tracking, and CSV export/import as a personal backup that will not duplicate
+what you already have.
 
 **Stages:** `Applied → Interviewing → Offer` or `Rejected`. Change one inline
 from the table without opening the edit form. `Received Offer` still exists as
@@ -18,18 +19,28 @@ Stage counts sit above the form (Applications, Open, Interviewing, Offers,
 Rejected), followed by derived metrics: **response rate** (anything that left
 "Applied"), **interview rate**, **offer rate**, **applications per week** over
 the last 30 days, **last 7 days**, **average wait** on the applications still
-open with the longest one named, and how many **distinct companies** you have
-applied to. Two small charts follow: a **pipeline bar** showing the share of
+open with the longest one named, how many are worth a **follow-up**, and how
+many **distinct companies** you have applied to. Two small charts follow: a **pipeline bar** showing the share of
 listings in each stage, and **applications per week** for the last eight
 Monday-to-Sunday weeks. If the app reports “Database schema is out of date”,
 re-run `supabase/schema.sql`; the table is missing the `status` column.
 
 Below the form: a search box (company, title, URL, stage), stage filter chips
-with counts, five sort orders, and an optional **Group by stage** view. All of
-it runs on the list already in memory, so switching views costs no extra
-queries. Both are pure functions in [`src/lib/metrics.ts`](src/lib/metrics.ts)
-and [`src/lib/organize.ts`](src/lib/organize.ts), unit-tested without a
-browser.
+with counts, five sort orders, and an optional **Group by stage** view. Search
+splits on whitespace and every term has to land somewhere in the row, so
+`acme senior` finds Acme / Senior Engineer even though the words sit in
+different fields. All of it runs on the list already in memory, so switching
+views costs no extra queries. Both are pure functions in
+[`src/lib/metrics.ts`](src/lib/metrics.ts) and
+[`src/lib/organize.ts`](src/lib/organize.ts), unit-tested without a browser.
+
+### Follow-ups
+
+An application still in **Applied** or **Interviewing** 14 days after the date
+applied is one nobody has answered, so it gets a **Follow up** badge on its
+row, a count in the metrics, and its own filter chip next to the stage chips.
+Offer and Rejected never qualify — the company already answered. The threshold
+is `FOLLOW_UP_DAYS` in [`src/lib/metrics.ts`](src/lib/metrics.ts).
 
 ## Database
 
@@ -117,6 +128,7 @@ Browser
   ├── Domain logic (src/lib/applications.ts)     ← validation, dates, stages, ids, limits
   ├── Metrics (src/lib/metrics.ts)               ← rates, pace, waiting times
   ├── Organizing (src/lib/organize.ts)           ← search, filter, sort, group
+  ├── Duplicates (src/lib/dedupe.ts)             ← import planning, form warning
   ├── Supabase adapter (src/lib/supabase-account.ts)
   ├── Store helpers (src/lib/store.ts)           ← used by tests / CSV shape
   └── CSV (src/lib/csv.ts)                       ← export + import
@@ -124,14 +136,18 @@ Browser
 
 1. **Account** — create an account or sign in. The session is a Supabase Auth
    JWT in the browser.
-2. **Add / edit / delete** — validated, then written to `applications` as *your* row. Delete asks for a second click to confirm.
+2. **Add / edit / delete** — validated, then written to `applications` as *your* row. Delete asks for a second click to confirm, and so does saving a listing that matches one you already track.
 3. **Stage** — the stage dropdown on a row writes `status` (and its
    `received_offer` mirror) for that row only.
 4. **Organize** — search text, filter by stage, sort, or group by stage. All of
    it is client-side over the list already loaded, so nothing re-queries.
-5. **Export CSV** — download a copy. Formula-looking values get a leading `'`.
-6. **Import CSV** — appends those rows to *your* account in one insert. Nothing
-   existing is deleted, so a rejected import cannot cost you data.
+5. **Export CSV** — download a copy. With a search or stage filter on, the
+   button says how many rows it will write and exports exactly those;
+   otherwise it is the whole account. Formula-looking values get a leading `'`.
+6. **Import CSV** — appends to *your* account in one insert, skipping rows the
+   account already holds and rows the file repeats, so re-importing your own
+   backup adds nothing instead of doubling everything. Nothing existing is
+   deleted, so a rejected import cannot cost you data.
 
 Sign out, close the tab, or open another device: sign in again and the list is
 still there.
@@ -193,6 +209,7 @@ src/App.tsx                   # UI (the surface Lovable can restyle)
 src/lib/applications.ts       # validation, dates, stages, formula escaping, limits
 src/lib/metrics.ts            # pipeline metrics (pure functions)
 src/lib/organize.ts           # search / filter / sort / group (pure functions)
+src/lib/dedupe.ts             # duplicate detection for import and the form
 src/lib/supabase-account.ts   # Auth + Postgres adapter
 src/lib/supabase-config.ts    # publishable key only; runtime config.json
 src/lib/store.ts              # in-memory helpers for tests

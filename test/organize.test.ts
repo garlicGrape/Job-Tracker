@@ -38,7 +38,15 @@ const companies = (apps: Application[]) => apps.map((a) => a.company);
 
 describe('filter options', () => {
   it('exposes every stage plus the all and open views', () => {
-    expect(STATUS_FILTERS).toEqual(['all', 'open', 'applied', 'interviewing', 'offer', 'rejected']);
+    expect(STATUS_FILTERS).toEqual([
+      'all',
+      'open',
+      'followup',
+      'applied',
+      'interviewing',
+      'offer',
+      'rejected'
+    ]);
     for (const filter of STATUS_FILTERS) {
       expect(STATUS_FILTER_LABELS[filter]).toBeTruthy();
     }
@@ -88,9 +96,14 @@ describe('filtering', () => {
     expect(matchesQuery(initech, '   ')).toBe(true);
   });
 
-  it('does not match across two fields by accident', () => {
+  it('requires every term, drawn from any field, in any order', () => {
     const [globex] = sample();
-    expect(matchesQuery(globex, 'Globex Backend')).toBe(false);
+    // Company and title together: the whole point of splitting on whitespace.
+    expect(matchesQuery(globex, 'Globex Backend')).toBe(true);
+    expect(matchesQuery(globex, 'backend globex')).toBe(true);
+    expect(matchesQuery(globex, 'globex   backend')).toBe(true);
+    // One term nothing matches still rejects the row.
+    expect(matchesQuery(globex, 'Globex Frontend')).toBe(false);
   });
 
   it('combines a query with a stage filter', () => {
@@ -107,6 +120,27 @@ describe('filtering', () => {
     expect(matchesStatusFilter(globex, 'applied')).toBe(true);
     expect(matchesStatusFilter(globex, 'open')).toBe(true);
     expect(matchesStatusFilter(globex, 'rejected')).toBe(false);
+  });
+
+  it('filters to what has gone quiet, measured against a given day', () => {
+    const apps = sample();
+    // Globex applied 2026-01-05 and Initech is interviewing since 2026-02-01;
+    // both are open. On this day only Globex has waited past the threshold.
+    expect(companies(filterApplications(apps, { status: 'followup', today: '2026-01-25' }))).toEqual([
+      'Globex'
+    ]);
+    // A day later Initech has crossed the threshold too, but acme (applied
+    // the day before) has not.
+    expect(
+      companies(filterApplications(apps, { status: 'followup', today: '2026-02-21' }))
+    ).toEqual(['Globex', 'Initech']);
+    expect(filterApplications(apps, { status: 'followup', today: '2026-01-10' })).toEqual([]);
+  });
+
+  it('never calls a closed stage a follow-up, however old', () => {
+    const apps = sample();
+    const due = filterApplications(apps, { status: 'followup', today: '2030-01-01' });
+    expect(companies(due)).toEqual(['Globex', 'acme', 'Initech']);
   });
 });
 
