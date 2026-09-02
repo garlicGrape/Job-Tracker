@@ -182,6 +182,9 @@ describe('Supabase account API', () => {
     expect(
       mapDatabaseError('Too many listings added in the past hour. Try again later.')
     ).toMatch(/past hour/);
+    expect(mapDatabaseError('column applications.status does not exist')).toMatch(
+      /re-run supabase\/schema\.sql/i
+    );
     expect(mapDatabaseError('Auth session missing!')).toBe('Auth session missing!');
   });
 });

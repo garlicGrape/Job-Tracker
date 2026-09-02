@@ -19,7 +19,10 @@ Rejected), followed by derived metrics: **response rate** (anything that left
 "Applied"), **interview rate**, **offer rate**, **applications per week** over
 the last 30 days, **last 7 days**, **average wait** on the applications still
 open with the longest one named, and how many **distinct companies** you have
-applied to.
+applied to. Two small charts follow: a **pipeline bar** showing the share of
+listings in each stage, and **applications per week** for the last eight
+Monday-to-Sunday weeks. If the app reports “Database schema is out of date”,
+re-run `supabase/schema.sql`; the table is missing the `status` column.
 
 Below the form: a search box (company, title, URL, stage), stage filter chips
 with counts, five sort orders, and an optional **Group by stage** view. All of

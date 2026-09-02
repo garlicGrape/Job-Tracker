@@ -16,6 +16,12 @@ import {
 
 export type StatusCounts = Record<ApplicationStatus, number>;
 
+export type WeekBucket = {
+  /** Monday of that calendar week, YYYY-MM-DD. */
+  weekStart: string;
+  count: number;
+};
+
 export type Metrics = {
   total: number;
   counts: StatusCounts;
@@ -116,4 +122,55 @@ export function computeMetrics(
     distinctCompanies: companies.size,
     lastAppliedDate
   };
+}
+
+const DAY_MS = 86_400_000;
+
+function fromUtc(ms: number): string {
+  const date = new Date(ms);
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${month}-${day}`;
+}
+
+function toUtc(iso: string): number {
+  const [y, m, d] = iso.split('-').map(Number);
+  return Date.UTC(y, m - 1, d);
+}
+
+/** Shift a YYYY-MM-DD string by whole days on the UTC calendar. */
+export function addDays(iso: string, days: number): string {
+  return fromUtc(toUtc(iso) + days * DAY_MS);
+}
+
+/** Monday on or before the given date. */
+export function weekStartOf(iso: string): string {
+  const ms = toUtc(iso);
+  const dow = new Date(ms).getUTCDay(); // 0 = Sunday
+  return fromUtc(ms - ((dow + 6) % 7) * DAY_MS);
+}
+
+/**
+ * Applications per calendar week (Monday to Sunday) for the most recent
+ * `weeks` weeks, oldest first, the current week last. Dates before the window
+ * or after the current week are left out.
+ */
+export function weeklyActivity(
+  apps: Application[],
+  today: string = todayIsoDate(),
+  weeks: number = 8
+): WeekBucket[] {
+  const bucketCount = Math.max(1, Math.floor(weeks));
+  const currentWeek = weekStartOf(today);
+  const buckets: WeekBucket[] = [];
+  for (let i = bucketCount - 1; i >= 0; i--) {
+    buckets.push({ weekStart: addDays(currentWeek, -7 * i), count: 0 });
+  }
+  const first = buckets[0].weekStart;
+  const afterLast = addDays(currentWeek, 7);
+  for (const app of apps) {
+    if (app.dateApplied < first || app.dateApplied >= afterLast) continue;
+    buckets[Math.floor(daysBetween(first, app.dateApplied) / 7)].count += 1;
+  }
+  return buckets;
 }
