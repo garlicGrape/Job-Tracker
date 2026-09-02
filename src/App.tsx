@@ -1,22 +1,25 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createAccountApiFromConfig, type AccountApi, type PublicUser } from './lib/supabase-account';
 import { loadSupabaseConfig } from './lib/supabase-config';
 import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv';
-import { LIMITS, assertCsvByteSize } from './lib/applications';
-import type { Application } from './lib/types';
+import { LIMITS, assertCsvByteSize, daysBetween, todayIsoDate } from './lib/applications';
+import { computeMetrics } from './lib/metrics';
+import {
+  SORT_OPTIONS,
+  STATUS_FILTERS,
+  STATUS_FILTER_LABELS,
+  groupByStatus,
+  organizeApplications,
+  type SortKey,
+  type StatusFilter
+} from './lib/organize';
+import { STATUSES, STATUS_LABELS, type Application, type ApplicationStatus } from './lib/types';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Listings are unlimited, so the table renders in chunks rather than putting
 // thousands of rows in the DOM at once.
 const ROWS_PER_CHUNK = 250;
-
-function todayIsoDate(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${month}-${day}`;
-}
 
 function isSafeHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
@@ -30,6 +33,16 @@ function formatDisplayDate(iso: string): string {
   const day = Number(parts[2]);
   if (!year || month < 1 || month > 12 || !day) return iso;
   return `${MONTHS[month - 1]} ${day}, ${year}`;
+}
+
+function formatAge(dateApplied: string, today: string): string {
+  const days = daysBetween(dateApplied, today);
+  if (days < 0) return 'scheduled';
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days} days ago`;
+  const months = Math.round(days / 30);
+  return months <= 1 ? 'about a month ago' : `about ${months} months ago`;
 }
 
 function BriefcaseIcon() {
@@ -51,6 +64,135 @@ function BriefcaseIcon() {
   );
 }
 
+type TableProps = {
+  items: Application[];
+  today: string;
+  editingId: string | null;
+  pendingDeleteId: string | null;
+  busy: boolean;
+  onEdit: (app: Application) => void;
+  onDelete: (id: string) => void;
+  onKeep: () => void;
+  onStatus: (id: string, status: ApplicationStatus) => void;
+};
+
+function ApplicationsTable({
+  items,
+  today,
+  editingId,
+  pendingDeleteId,
+  busy,
+  onEdit,
+  onDelete,
+  onKeep,
+  onStatus
+}: TableProps) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Company</th>
+          <th>Title</th>
+          <th>Date applied</th>
+          <th>Stage</th>
+          <th>Posting</th>
+          <th>
+            <span className="sr-only">Actions</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((app) => (
+          <tr
+            key={app.id}
+            className={[
+              editingId === app.id ? 'is-editing' : '',
+              pendingDeleteId === app.id ? 'is-pending-delete' : ''
+            ]
+              .filter(Boolean)
+              .join(' ') || undefined}
+          >
+            <td data-label="Company">
+              <span className="cell-strong">{app.company}</span>
+            </td>
+            <td data-label="Title">{app.title}</td>
+            <td data-label="Date applied">
+              <span className="cell-stack">
+                <time dateTime={app.dateApplied}>{formatDisplayDate(app.dateApplied)}</time>
+                <span className="cell-sub">{formatAge(app.dateApplied, today)}</span>
+              </span>
+            </td>
+            <td data-label="Stage">
+              <select
+                className={`status-select is-${app.status}`}
+                value={app.status}
+                disabled={busy}
+                aria-label={`Stage for ${app.company} ${app.title}`}
+                onChange={(e) => onStatus(app.id, e.target.value as ApplicationStatus)}
+              >
+                {STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {STATUS_LABELS[status]}
+                  </option>
+                ))}
+              </select>
+            </td>
+            <td data-label="Posting">
+              {app.postingUrl && isSafeHttpUrl(app.postingUrl) ? (
+                <a href={app.postingUrl} target="_blank" rel="noopener noreferrer">
+                  View posting
+                </a>
+              ) : (
+                <span className="muted">—</span>
+              )}
+            </td>
+            <td data-label="Actions">
+              <div className="row-actions">
+                {pendingDeleteId === app.id ? (
+                  <>
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => onDelete(app.id)}
+                      disabled={busy}
+                      aria-label={`Confirm delete ${app.company} ${app.title}`}
+                    >
+                      Confirm delete
+                    </button>
+                    <button type="button" className="linkish" onClick={onKeep} disabled={busy}>
+                      Keep
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="linkish"
+                      onClick={() => onEdit(app)}
+                      aria-label={`Edit ${app.company} ${app.title}`}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="linkish danger-text"
+                      onClick={() => onDelete(app.id)}
+                      disabled={busy}
+                      aria-label={`Delete ${app.company} ${app.title}`}
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
+              </div>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export default function App() {
   const [api, setApi] = useState<AccountApi | null>(null);
   const [configured, setConfigured] = useState(false);
@@ -64,10 +206,14 @@ export default function App() {
   const [company, setCompany] = useState('');
   const [title, setTitle] = useState('');
   const [dateApplied, setDateApplied] = useState(todayIsoDate);
-  const [receivedOffer, setReceivedOffer] = useState(false);
+  const [formStatus, setFormStatus] = useState<ApplicationStatus>('applied');
   const [postingUrl, setPostingUrl] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [sort, setSort] = useState<SortKey>('newest');
+  const [grouped, setGrouped] = useState(false);
   const [visibleCount, setVisibleCount] = useState(ROWS_PER_CHUNK);
   const [message, setMessage] = useState<{ text: string; kind: 'error' | 'success' | '' }>({
     text: '',
@@ -122,11 +268,37 @@ export default function App() {
     };
   }, []);
 
+  // A narrower view should start from its own first chunk, not halfway down
+  // the previous one.
+  useEffect(() => {
+    setVisibleCount(ROWS_PER_CHUNK);
+  }, [query, statusFilter, sort]);
+
+  const today = todayIsoDate();
+  const metrics = useMemo(() => computeMetrics(applications, today), [applications, today]);
+  const organized = useMemo(
+    () => organizeApplications(applications, { query, status: statusFilter, sort }),
+    [applications, query, statusFilter, sort]
+  );
+  const shown = Math.min(visibleCount, organized.length);
+  const visibleApplications = organized.slice(0, shown);
+  const groups = useMemo(
+    () => (grouped ? groupByStatus(visibleApplications) : []),
+    [grouped, visibleApplications]
+  );
+  const filtering = query.trim() !== '' || statusFilter !== 'all';
+
+  function filterCount(filter: StatusFilter): number {
+    if (filter === 'all') return applications.length;
+    if (filter === 'open') return metrics.open;
+    return metrics.counts[filter];
+  }
+
   function resetForm() {
     setCompany('');
     setTitle('');
     setDateApplied(todayIsoDate());
-    setReceivedOffer(false);
+    setFormStatus('applied');
     setPostingUrl('');
     setEditingId(null);
   }
@@ -166,6 +338,8 @@ export default function App() {
       setApplications([]);
       resetForm();
       setPendingDeleteId(null);
+      setQuery('');
+      setStatusFilter('all');
       setMessage({ text: 'Signed out.', kind: 'success' });
     } catch (err) {
       setMessage({
@@ -186,7 +360,7 @@ export default function App() {
         company,
         title,
         dateApplied,
-        receivedOffer,
+        status: formStatus,
         postingUrl
       };
       const wasEditing = Boolean(editingId);
@@ -210,7 +384,7 @@ export default function App() {
     setCompany(app.company);
     setTitle(app.title);
     setDateApplied(app.dateApplied);
-    setReceivedOffer(app.receivedOffer);
+    setFormStatus(app.status);
     setPostingUrl(app.postingUrl);
     setPendingDeleteId(null);
     setMessage({ text: '', kind: '' });
@@ -248,16 +422,17 @@ export default function App() {
     }
   }
 
-  async function onToggleOffer(id: string, checked: boolean) {
+  async function onChangeStatus(id: string, status: ApplicationStatus) {
     if (!api) return;
     try {
-      setApplications(await api.setOffer(id, checked));
+      setApplications(await api.setStatus(id, status));
       if (editingId === id) {
-        setReceivedOffer(checked);
+        setFormStatus(status);
       }
+      setMessage({ text: `Moved to ${STATUS_LABELS[status]}.`, kind: 'success' });
     } catch (err) {
       setMessage({
-        text: err instanceof Error ? err.message : 'Could not update offer.',
+        text: err instanceof Error ? err.message : 'Could not update the stage.',
         kind: 'error'
       });
     }
@@ -308,10 +483,76 @@ export default function App() {
     reader.readAsText(file);
   }
 
-  const offerCount = applications.filter((app) => app.receivedOffer).length;
-  const waitingCount = applications.length - offerCount;
-  const shown = Math.min(visibleCount, applications.length);
-  const visibleApplications = applications.slice(0, shown);
+  const statCards = [
+    { key: 'total', value: metrics.total, label: metrics.total === 1 ? 'Application' : 'Applications' },
+    { key: 'open', value: metrics.open, label: 'Open' },
+    { key: 'interviewing', value: metrics.counts.interviewing, label: 'Interviewing' },
+    { key: 'offer', value: metrics.counts.offer, label: metrics.counts.offer === 1 ? 'Offer' : 'Offers' },
+    { key: 'rejected', value: metrics.counts.rejected, label: 'Rejected' }
+  ];
+
+  const insightCards = [
+    {
+      key: 'response',
+      value: `${metrics.responseRate}%`,
+      label: 'Response rate',
+      hint: `${metrics.answered} of ${metrics.total} answered`
+    },
+    {
+      key: 'interview',
+      value: `${metrics.interviewRate}%`,
+      label: 'Interview rate',
+      hint: `${metrics.counts.interviewing + metrics.counts.offer} reached interviews`
+    },
+    {
+      key: 'offerRate',
+      value: `${metrics.offerRate}%`,
+      label: 'Offer rate',
+      hint: `${metrics.rejectionRate}% rejected`
+    },
+    {
+      key: 'pace',
+      value: metrics.weeklyPace,
+      label: 'Per week',
+      hint: `${metrics.appliedLast30Days} in the last 30 days`
+    },
+    {
+      key: 'recent',
+      value: metrics.appliedLast7Days,
+      label: 'Last 7 days',
+      hint: metrics.lastAppliedDate
+        ? `Latest ${formatDisplayDate(metrics.lastAppliedDate)}`
+        : 'Nothing yet'
+    },
+    {
+      key: 'wait',
+      value: `${metrics.avgOpenAgeDays}d`,
+      label: 'Avg open wait',
+      hint: metrics.longestOpenWait
+        ? `Longest ${metrics.longestOpenWait.days}d · ${metrics.longestOpenWait.company}`
+        : 'Nothing open'
+    },
+    {
+      key: 'companies',
+      value: metrics.distinctCompanies,
+      label: metrics.distinctCompanies === 1 ? 'Company' : 'Companies',
+      hint:
+        metrics.distinctCompanies > 0
+          ? `${(metrics.total / metrics.distinctCompanies).toFixed(1)} roles each`
+          : 'No companies yet'
+    }
+  ];
+
+  const tableProps = {
+    today,
+    editingId,
+    pendingDeleteId,
+    busy,
+    onEdit,
+    onDelete: (id: string) => void onDelete(id),
+    onKeep: () => setPendingDeleteId(null),
+    onStatus: (id: string, status: ApplicationStatus) => void onChangeStatus(id, status)
+  };
 
   return (
     <div className="page">
@@ -455,19 +696,23 @@ export default function App() {
 
         {ready && user && api ? (
           <>
-            <div className="stats" aria-label="Application summary">
-              <div className="stat">
-                <span className="stat-value">{applications.length}</span>
-                <span className="stat-label">{applications.length === 1 ? 'Application' : 'Applications'}</span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{offerCount}</span>
-                <span className="stat-label">{offerCount === 1 ? 'Offer' : 'Offers'}</span>
-              </div>
-              <div className="stat">
-                <span className="stat-value">{waitingCount}</span>
-                <span className="stat-label">Waiting</span>
-              </div>
+            <div className="stats" aria-label="Pipeline by stage">
+              {statCards.map((card) => (
+                <div className={`stat is-${card.key}`} key={card.key}>
+                  <span className="stat-value">{card.value}</span>
+                  <span className="stat-label">{card.label}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="insights" aria-label="Application metrics">
+              {insightCards.map((card) => (
+                <div className="insight" key={card.key}>
+                  <span className="insight-value">{card.value}</span>
+                  <span className="insight-label">{card.label}</span>
+                  <span className="insight-hint">{card.hint}</span>
+                </div>
+              ))}
             </div>
 
             <div className="card form-card">
@@ -518,16 +763,19 @@ export default function App() {
                   />
                 </div>
                 <div className="field">
-                  <div className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      id="receivedOffer"
-                      name="receivedOffer"
-                      checked={receivedOffer}
-                      onChange={(e) => setReceivedOffer(e.target.checked)}
-                    />
-                    <label htmlFor="receivedOffer">Received offer</label>
-                  </div>
+                  <label htmlFor="status">Stage</label>
+                  <select
+                    id="status"
+                    name="status"
+                    value={formStatus}
+                    onChange={(e) => setFormStatus(e.target.value as ApplicationStatus)}
+                  >
+                    {STATUSES.map((status) => (
+                      <option key={status} value={status}>
+                        {STATUS_LABELS[status]}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="field field-wide">
                   <label htmlFor="postingUrl">Posting URL</label>
@@ -564,9 +812,11 @@ export default function App() {
                 <p className="section-lede">
                   {applications.length === 0
                     ? 'Nothing here yet.'
-                    : shown < applications.length
-                      ? `Showing ${shown} of ${applications.length} · edit or delete any row`
-                      : `${applications.length} saved · edit or delete any row`}
+                    : shown < organized.length
+                      ? `Showing ${shown} of ${organized.length} · change a stage inline, or edit any row`
+                      : filtering
+                        ? `${organized.length} of ${applications.length} shown`
+                        : `${applications.length} saved · change a stage inline, or edit any row`}
                 </p>
               </div>
               <div className="toolbar">
@@ -596,6 +846,65 @@ export default function App() {
               </div>
             </div>
 
+            {applications.length > 0 ? (
+              <div className="organizer">
+                <div className="filter-chips" role="group" aria-label="Filter by stage">
+                  {STATUS_FILTERS.map((filter) => (
+                    <button
+                      type="button"
+                      key={filter}
+                      className={
+                        statusFilter === filter ? `chip is-active is-${filter}` : `chip is-${filter}`
+                      }
+                      aria-pressed={statusFilter === filter}
+                      onClick={() => setStatusFilter(filter)}
+                    >
+                      {STATUS_FILTER_LABELS[filter]}
+                      <span className="chip-count">{filterCount(filter)}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="organizer-controls">
+                  <div className="search-field">
+                    <label className="sr-only" htmlFor="search">
+                      Search company, title, or URL
+                    </label>
+                    <input
+                      type="search"
+                      id="search"
+                      placeholder="Search company or title…"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                    />
+                  </div>
+                  <div className="sort-field">
+                    <label className="sr-only" htmlFor="sort">
+                      Sort listings
+                    </label>
+                    <select
+                      id="sort"
+                      value={sort}
+                      onChange={(e) => setSort(e.target.value as SortKey)}
+                    >
+                      {SORT_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    className={grouped ? 'secondary is-on' : 'secondary'}
+                    aria-pressed={grouped}
+                    onClick={() => setGrouped((on) => !on)}
+                  >
+                    {grouped ? 'Ungroup' : 'Group by stage'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             {applications.length === 0 ? (
               <div className="card empty">
                 <div className="empty-icon" aria-hidden="true">
@@ -604,120 +913,58 @@ export default function App() {
                 <p className="empty-title">No applications yet</p>
                 <p>Add your first listing above, or import a CSV backup.</p>
               </div>
-            ) : (
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Company</th>
-                      <th>Title</th>
-                      <th>Date applied</th>
-                      <th>Offer</th>
-                      <th>Posting</th>
-                      <th>
-                        <span className="sr-only">Actions</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleApplications.map((app) => (
-                      <tr
-                        key={app.id}
-                        className={[
-                          editingId === app.id ? 'is-editing' : '',
-                          pendingDeleteId === app.id ? 'is-pending-delete' : ''
-                        ]
-                          .filter(Boolean)
-                          .join(' ') || undefined}
-                      >
-                        <td data-label="Company">
-                          <span className="cell-strong">{app.company}</span>
-                        </td>
-                        <td data-label="Title">{app.title}</td>
-                        <td data-label="Date applied">
-                          <time dateTime={app.dateApplied}>{formatDisplayDate(app.dateApplied)}</time>
-                        </td>
-                        <td data-label="Offer">
-                          <button
-                            type="button"
-                            className={app.receivedOffer ? 'offer-pill is-on' : 'offer-pill'}
-                            aria-pressed={app.receivedOffer}
-                            aria-label={
-                              app.receivedOffer
-                                ? `Offer from ${app.company}. Click to mark as waiting.`
-                                : `No offer from ${app.company}. Click to mark as received.`
-                            }
-                            onClick={() => void onToggleOffer(app.id, !app.receivedOffer)}
-                          >
-                            {app.receivedOffer ? 'Offer' : 'Waiting'}
-                          </button>
-                        </td>
-                        <td data-label="Posting">
-                          {app.postingUrl && isSafeHttpUrl(app.postingUrl) ? (
-                            <a href={app.postingUrl} target="_blank" rel="noopener noreferrer">
-                              View posting
-                            </a>
-                          ) : (
-                            <span className="muted">—</span>
-                          )}
-                        </td>
-                        <td data-label="Actions">
-                          <div className="row-actions">
-                            {pendingDeleteId === app.id ? (
-                              <>
-                                <button
-                                  type="button"
-                                  className="danger"
-                                  onClick={() => void onDelete(app.id)}
-                                  disabled={busy}
-                                  aria-label={`Confirm delete ${app.company} ${app.title}`}
-                                >
-                                  Confirm delete
-                                </button>
-                                <button
-                                  type="button"
-                                  className="linkish"
-                                  onClick={() => setPendingDeleteId(null)}
-                                  disabled={busy}
-                                >
-                                  Keep
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  className="linkish"
-                                  onClick={() => onEdit(app)}
-                                  aria-label={`Edit ${app.company} ${app.title}`}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  className="linkish danger-text"
-                                  onClick={() => void onDelete(app.id)}
-                                  disabled={busy}
-                                  aria-label={`Delete ${app.company} ${app.title}`}
-                                >
-                                  Delete
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {shown < applications.length ? (
+            ) : organized.length === 0 ? (
+              <div className="card empty">
+                <p className="empty-title">Nothing matches those filters</p>
+                <p>
+                  <button
+                    type="button"
+                    className="linkish"
+                    onClick={() => {
+                      setQuery('');
+                      setStatusFilter('all');
+                    }}
+                  >
+                    Clear the search and stage filter
+                  </button>
+                </p>
+              </div>
+            ) : grouped ? (
+              <div className="group-list">
+                {groups.map((group) => (
+                  <section className={`group is-${group.status}`} key={group.status}>
+                    <div className="group-head">
+                      <h3>{group.label}</h3>
+                      <span className="group-count">{group.items.length}</span>
+                    </div>
+                    <div className="table-scroll">
+                      <ApplicationsTable items={group.items} {...tableProps} />
+                    </div>
+                  </section>
+                ))}
+                {shown < organized.length ? (
                   <div className="show-more">
                     <button
                       type="button"
                       className="secondary"
                       onClick={() => setVisibleCount((n) => n + ROWS_PER_CHUNK)}
                     >
-                      Show {Math.min(ROWS_PER_CHUNK, applications.length - shown)} more
+                      Show {Math.min(ROWS_PER_CHUNK, organized.length - shown)} more
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="table-scroll">
+                <ApplicationsTable items={visibleApplications} {...tableProps} />
+                {shown < organized.length ? (
+                  <div className="show-more">
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setVisibleCount((n) => n + ROWS_PER_CHUNK)}
+                    >
+                      Show {Math.min(ROWS_PER_CHUNK, organized.length - shown)} more
                     </button>
                   </div>
                 ) : null}

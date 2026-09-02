@@ -7,13 +7,17 @@ export, not the database. It is not a Google Apps Script project.
 ## What this project is
 
 - `src/App.tsx` — the UI (sign in / sign up + form). Vanilla React.
-- `src/lib/applications.ts` — validation, dates, formula escaping, abuse limits.
+- `src/lib/applications.ts` — validation, dates, stages, formula escaping, abuse limits.
+- `src/lib/metrics.ts` — pipeline metrics. Pure; takes the list and "today".
+- `src/lib/organize.ts` — search / filter / sort / group. Pure and non-mutating.
 - `src/lib/supabase-account.ts` — injected Supabase client; Auth + `applications`. Reads are paged.
 - `src/lib/supabase-config.ts` — publishable-key parsing; runtime `config.json`.
 - `src/lib/store.ts` — `{ getItem, setItem }` helpers used by unit tests.
 - `src/lib/csv.ts` — CSV export / import.
 - `supabase/schema.sql` — table, RLS, field CHECKs, write-rate trigger. Run in the SQL editor.
 - `test/*.test.ts` — Vitest suites that import `src/lib` directly.
+- `test/fake-supabase.ts` — in-memory Auth + `applications` stand-in, including
+ the CHECKs and the write-rate trigger. Shared by the suites.
 
 ## Hard constraints
 
@@ -28,7 +32,16 @@ export, not the database. It is not a Google Apps Script project.
   value starting with `=`, `+`, `-`, or `@` is otherwise evaluated by Excel /
   Sheets. Storage itself keeps the original string so the table stays readable.
 - **Store dates as `YYYY-MM-DD` text, never `Date` objects.** The Postgres
-  column is `text` (`date_applied`) for the same reason.
+ column is `text` (`date_applied`) for the same reason. Date arithmetic goes
+ through `daysBetween`, which counts on the UTC calendar so a DST change
+ cannot add or drop a day.
+- **`status` is the pipeline stage** — one of `applied`, `interviewing`,
+ `offer`, `rejected`. `receivedOffer` / `received_offer` is only a mirror of
+ `status === 'offer'`, kept for older CSV exports; a Postgres `CHECK` enforces
+ that. Write both in one statement, never one alone. `STATUSES`,
+ `applications_status_valid`, and the CSV `Status` column must stay in sync.
+ Unknown stage text normalizes to a fallback instead of throwing, so a row
+ written by an older build still reads.
 - **Listings are unlimited. Do not reintroduce a per-account row cap.** Abuse is
   bounded by row size (`CHECK`s) and write rate (5,000 rows per statement,
   20,000 per hour), which hold at any table size. `LIMITS` in

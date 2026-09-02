@@ -11,6 +11,7 @@ function sampleApp(overrides: Partial<Application> = {}): Application {
     company: 'Acme',
     title: 'Dev',
     dateApplied: '2026-08-20',
+    status: 'applied',
     receivedOffer: false,
     postingUrl: '',
     ...overrides
@@ -73,10 +74,10 @@ describe('formula-injection escaping (CSV)', () => {
 
 describe('CSV round-trip', () => {
   it('exports a header row and one data row', () => {
-    const csv = applicationsToCsv([sampleApp({ receivedOffer: true })]);
+    const csv = applicationsToCsv([sampleApp({ status: 'offer', receivedOffer: true })]);
     const lines = csv.trim().split(/\r?\n/);
-    expect(lines[0]).toBe('Company,Title,Date Applied,Received Offer,Posting URL');
-    expect(splitCsvLine(lines[1])).toEqual(['Acme', 'Dev', '2026-08-20', 'TRUE', '']);
+    expect(lines[0]).toBe('Company,Title,Date Applied,Received Offer,Posting URL,Status');
+    expect(splitCsvLine(lines[1])).toEqual(['Acme', 'Dev', '2026-08-20', 'TRUE', '', 'Offer']);
   });
 
   it('quotes fields that contain commas', () => {

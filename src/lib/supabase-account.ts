@@ -3,8 +3,16 @@
  * Framework-free: pass a Supabase client. Tests pass a fake client.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { LIMITS, assertWriteBatchSize, createApplication, mapDatabaseError } from './applications';
-import type { Application, ApplicationInput } from './types';
+import {
+  LIMITS,
+  assertWriteBatchSize,
+  createApplication,
+  mapDatabaseError,
+  normalizeStatus
+} from './applications';
+import type { Application, ApplicationInput, ApplicationStatus } from './types';
+
+const COLUMNS = 'id,company,title,date_applied,status,received_offer,posting_url';
 
 export type PublicUser = {
   id: string;
@@ -21,6 +29,7 @@ export type AccountApi = {
   addMany(apps: Application[]): Promise<Application[]>;
   update(id: string, input: ApplicationInput): Promise<Application[]>;
   remove(id: string): Promise<Application[]>;
+  setStatus(id: string, status: ApplicationStatus): Promise<Application[]>;
   setOffer(id: string, received: boolean): Promise<Application[]>;
 };
 
@@ -30,17 +39,24 @@ export type ApplicationRow = {
   company: string;
   title: string;
   date_applied: string;
+  status?: string | null;
   received_offer: boolean;
   posting_url: string | null;
 };
 
+/**
+ * Rows written before the status column existed carry only the offer flag,
+ * so that flag is the fallback stage.
+ */
 export function fromRow(row: ApplicationRow): Application {
+  const status = normalizeStatus(row.status, row.received_offer ? 'offer' : 'applied');
   return {
     id: row.id,
     company: row.company,
     title: row.title,
     dateApplied: row.date_applied,
-    receivedOffer: Boolean(row.received_offer),
+    status,
+    receivedOffer: status === 'offer',
     postingUrl: row.posting_url ?? ''
   };
 }
@@ -52,6 +68,7 @@ export function toRow(userId: string, app: Application): ApplicationRow {
     company: app.company,
     title: app.title,
     date_applied: app.dateApplied,
+    status: app.status,
     received_offer: app.receivedOffer,
     posting_url: app.postingUrl
   };
@@ -92,7 +109,7 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
     for (let from = 0; ; from += LIMITS.pageSize) {
       const { data, error } = await client
         .from('applications')
-        .select('id,company,title,date_applied,received_offer,posting_url')
+        .select(COLUMNS)
         .order('date_applied', { ascending: true })
         .order('id', { ascending: true })
         .range(from, from + LIMITS.pageSize - 1);
@@ -105,6 +122,24 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
         return all;
       }
     }
+  }
+
+  /**
+   * Move one listing to another stage. `received_offer` is written in the
+   * same statement so the two columns cannot drift apart.
+   */
+  async function setStatus(id: string, status: ApplicationStatus): Promise<Application[]> {
+    await requireUser();
+    if (!id || typeof id !== 'string') {
+      throw new Error('Invalid application id.');
+    }
+    const next = normalizeStatus(status);
+    const { error } = await client
+      .from('applications')
+      .update({ status: next, received_offer: next === 'offer' })
+      .eq('id', id);
+    throwOn(error);
+    return list();
   }
 
   return {
@@ -174,6 +209,7 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
           company: app.company,
           title: app.title,
           date_applied: app.dateApplied,
+          status: app.status,
           received_offer: app.receivedOffer,
           posting_url: app.postingUrl
         })
@@ -192,14 +228,10 @@ export function createSupabaseAccountApi(client: SupabaseClient): AccountApi {
       return list();
     },
 
+    setStatus,
+
     async setOffer(id, received) {
-      await requireUser();
-      const { error } = await client
-        .from('applications')
-        .update({ received_offer: received })
-        .eq('id', id);
-      throwOn(error);
-      return list();
+      return setStatus(id, received ? 'offer' : 'applied');
     }
   };
 }
