@@ -223,6 +223,25 @@ describe('grouping', () => {
     expect(groupByStatus([])).toEqual([]);
   });
 
+  it('keeps every stage when asked, so a board never drops a column', () => {
+    const onlyRejected = groupByStatus(
+      [app({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01', status: 'rejected' })],
+      { includeEmpty: true }
+    );
+    expect(onlyRejected.map((g) => g.status)).toEqual([
+      'applied',
+      'interviewing',
+      'offer',
+      'rejected'
+    ]);
+    expect(onlyRejected.map((g) => g.items.length)).toEqual([0, 0, 0, 1]);
+
+    const empty = groupByStatus([], { includeEmpty: true });
+    expect(empty).toHaveLength(4);
+    expect(empty.every((g) => g.items.length === 0)).toBe(true);
+    expect(empty.map((g) => g.label)).toEqual(['Applied', 'Interviewing', 'Offer', 'Rejected']);
+  });
+
   it('keeps the incoming order inside a group', () => {
     const groups = groupByStatus(sortApplications(sample(), 'newest'));
     expect(companies(groups[0].items)).toEqual(['acme', 'Globex']);

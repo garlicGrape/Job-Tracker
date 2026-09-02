@@ -5,28 +5,54 @@ password; job listings persist in **your Supabase Postgres database**, private
 to that account via row-level security.
 
 Five fields — **Company**, **Title**, **Date Applied**, **Stage**, **Posting
-URL** — plus search / filter / sort / grouping, pipeline metrics, follow-up
-tracking, and CSV export/import as a personal backup that will not duplicate
-what you already have.
+URL** — plus a list and a board view, search / filter / sort, pipeline metrics,
+follow-up tracking, and CSV export/import as a personal backup that will not
+duplicate what you already have.
 
 **Stages:** `Applied → Interviewing → Offer` or `Rejected`. Change one inline
-from the table without opening the edit form. `Received Offer` still exists as
-a mirror of the offer stage, so older CSV exports keep working.
+from any row or card without opening the edit form. `Received Offer` still
+exists as a mirror of the offer stage, so older CSV exports keep working.
 
-## Organizing and metrics
+## Seeing what you applied to
 
-Stage counts sit above the form (Applications, Open, Interviewing, Offers,
-Rejected), followed by derived metrics: **response rate** (anything that left
-"Applied"), **interview rate**, **offer rate**, **applications per week** over
-the last 30 days, **last 7 days**, **average wait** on the applications still
-open with the longest one named, how many are worth a **follow-up**, and how
-many **distinct companies** you have applied to. Two small charts follow: a **pipeline bar** showing the share of
-listings in each stage, and **applications per week** for the last eight
-Monday-to-Sunday weeks. If the app reports “Database schema is out of date”,
-re-run `supabase/schema.sql`; the table is missing the `status` column.
+The page opens on the listings, not on a form. Every row leads with a **company
+badge** — the initials, tinted by a hue derived from the company name, so the
+same employer looks the same everywhere and a long list stays scannable — then
+the role, when you applied and how long ago, the stage, and the posting link.
 
-Below the form: a search box (company, title, URL, stage), stage filter chips
-with counts, five sort orders, and an optional **Group by stage** view. Search
+Two views, switched from the toolbar:
+
+- **List** — a table on a wide screen. Under 760px the same rows restyle into
+  cards: company and stage on the first line, the role on the second, date and
+  actions on the third. Nothing is duplicated in the DOM, so a long list is one
+  node per row either way.
+- **Board** — one column per stage, all four always present, because an empty
+  Interviewing column next to a full Applied one is itself the answer. On a
+  phone the columns become a snapping horizontal rail.
+
+Add and edit happen in a panel that stays closed until you ask for it (the
+**Add** button, or the floating button on a phone), so the list keeps the
+screen.
+
+The interface follows your system light/dark setting and the moon/sun button in
+the header overrides it; the choice is remembered per browser.
+
+## Metrics
+
+A summary card leads with the total, how many are open, and your **weekly
+pace**, over a **pipeline bar** showing the share of listings in each stage —
+each legend row also filters the list. Beside it, **applications per week** for
+the last eight Monday-to-Sunday weeks. Then the derived numbers: **response
+rate** (anything that left "Applied"), **interview rate**, **offer rate**,
+**last 7 days**, **average wait** on the applications still open with the
+longest one named, how many are worth a **follow-up**, how many **distinct
+companies** you have applied to, and how many are **still open**. The follow-up
+and still-open tiles filter the list when clicked. If the app reports
+“Database schema is out of date”, re-run `supabase/schema.sql`; the table is
+missing the `status` column.
+
+The toolbar above the list holds a search box (company, title, URL, stage),
+stage filter chips with counts, five sort orders, and the view switch. Search
 splits on whitespace and every term has to land somewhere in the row, so
 `acme senior` finds Acme / Senior Engineer even though the words sit in
 different fields. All of it runs on the list already in memory, so switching
@@ -37,8 +63,9 @@ views costs no extra queries. Both are pure functions in
 ### Follow-ups
 
 An application still in **Applied** or **Interviewing** 14 days after the date
-applied is one nobody has answered, so it gets a **Follow up** badge on its
-row, a count in the metrics, and its own filter chip next to the stage chips.
+applied is one nobody has answered, so it gets a **Follow up** badge on its row
+or card, a tile in the metrics that filters the list, and its own chip next to
+the stage chips.
 Offer and Rejected never qualify — the company already answered. The threshold
 is `FOLLOW_UP_DAYS` in [`src/lib/metrics.ts`](src/lib/metrics.ts).
 
@@ -124,10 +151,10 @@ builds do **not** inline keys; the app loads `config.json` at runtime.
 
 ```
 Browser
-  ├── React UI (src/App.tsx)                     ← sign in / sign up + form (Lovable)
+  ├── React UI (src/App.tsx)                     ← auth, list / board views, form panel
   ├── Domain logic (src/lib/applications.ts)     ← validation, dates, stages, ids, limits
   ├── Metrics (src/lib/metrics.ts)               ← rates, pace, waiting times
-  ├── Organizing (src/lib/organize.ts)           ← search, filter, sort, group
+  ├── Organizing (src/lib/organize.ts)           ← search, filter, sort, group by stage
   ├── Duplicates (src/lib/dedupe.ts)             ← import planning, form warning
   ├── Supabase adapter (src/lib/supabase-account.ts)
   ├── Store helpers (src/lib/store.ts)           ← used by tests / CSV shape
@@ -139,8 +166,9 @@ Browser
 2. **Add / edit / delete** — validated, then written to `applications` as *your* row. Delete asks for a second click to confirm, and so does saving a listing that matches one you already track.
 3. **Stage** — the stage dropdown on a row writes `status` (and its
    `received_offer` mirror) for that row only.
-4. **Organize** — search text, filter by stage, sort, or group by stage. All of
-   it is client-side over the list already loaded, so nothing re-queries.
+4. **Organize** — search text, filter by stage, sort, or switch between the
+   list and the stage board. All of it is client-side over the list already
+   loaded, so nothing re-queries.
 5. **Export CSV** — download a copy. With a search or stage filter on, the
    button says how many rows it will write and exports exactly those;
    otherwise it is the whole account. Formula-looking values get a leading `'`.
