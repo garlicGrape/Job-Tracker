@@ -131,15 +131,23 @@ export function sortApplications(apps: Application[], sort: SortKey = 'newest'):
 }
 
 /**
- * Bucket listings by stage in pipeline order. Empty stages are dropped so the
- * UI does not render headers with nothing under them.
+ * Bucket listings by stage in pipeline order.
+ *
+ * Empty stages are dropped by default so a grouped list never renders a header
+ * with nothing under it. `includeEmpty` keeps them, which is what a board wants:
+ * a column that has gone empty is itself information, and columns that appear
+ * and disappear as the filter changes would make the pipeline hard to read.
  */
-export function groupByStatus(apps: Application[]): StatusGroup[] {
-  return STATUSES.map((status) => ({
+export function groupByStatus(
+  apps: Application[],
+  options: { includeEmpty?: boolean } = {}
+): StatusGroup[] {
+  const groups = STATUSES.map((status) => ({
     status,
     label: STATUS_LABELS[status],
     items: apps.filter((app) => app.status === status)
-  })).filter((group) => group.items.length > 0);
+  }));
+  return options.includeEmpty ? groups : groups.filter((group) => group.items.length > 0);
 }
 
 export function organizeApplications(

@@ -6,7 +6,13 @@ export, not the database. It is not a Google Apps Script project.
 
 ## What this project is
 
-- `src/App.tsx` — the UI (sign in / sign up + form). Vanilla React.
+- `src/App.tsx` — the UI: auth, the metrics header, the list / board views, and
+  the add-edit panel. Vanilla React, no UI library.
+- `src/index.css` — the whole visual system. Light values on `:root`, the dark
+  theme overriding the same token names under `[data-theme="dark"]`.
+- `index.html` — sets `data-theme` from localStorage or the OS **before first
+  paint**, so dark mode does not flash white. Keep its two colours in step with
+  `--bg` in `src/index.css` and the `theme-color` meta App.tsx writes.
 - `src/lib/applications.ts` — validation, dates, stages, formula escaping, abuse limits.
 - `src/lib/metrics.ts` — pipeline metrics. Pure; takes the list and "today".
 - `src/lib/organize.ts` — search / filter / sort / group. Pure and non-mutating.
@@ -53,6 +59,9 @@ export, not the database. It is not a Google Apps Script project.
   backup; `planImport` is what stops it from doubling every listing. Identity
   is `duplicateKey` (company + title + date, case- and whitespace-folded), and
   the form's duplicate warning must use the same key so the two agree.
+- **One DOM for both layouts.** The listings table restyles into cards under
+  760px through `data-cell` grid areas; do not render a second card list beside
+  the table. Listings are unlimited, so a row must cost one node, not two.
 - **Never edit `test/harness.ts` to make a test pass.** Fix `src/lib` instead.
 - `npm test` is the gate. **Do not open a PR on red.** Tests must not need a
   live Supabase project (use a fake client).
