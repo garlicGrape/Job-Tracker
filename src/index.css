@@ -11,6 +11,12 @@
   --offer-soft: #e4f6ef;
   --waiting: #6b5c2a;
   --waiting-soft: #f6efd8;
+  --applied: #3d5670;
+  --applied-soft: #eef2f8;
+  --interviewing: #8a5512;
+  --interviewing-soft: #fdf0dc;
+  --rejected: #a3324a;
+  --rejected-soft: #fdecef;
   --danger: #c0364a;
   --danger-soft: #fdecee;
   --success: #0f7a5a;
@@ -160,7 +166,10 @@ label {
 input[type="text"],
 input[type="date"],
 input[type="password"],
-input[type="email"] {
+input[type="email"],
+input[type="search"],
+.app-form select,
+.organizer select {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 10px 12px;
@@ -172,25 +181,21 @@ input[type="email"] {
   color: var(--ink);
 }
 
+.app-form select,
+.organizer select {
+  font-weight: 650;
+  cursor: pointer;
+}
+
 input[type="text"]:focus,
 input[type="date"]:focus,
 input[type="password"]:focus,
-input[type="email"]:focus {
+input[type="email"]:focus,
+input[type="search"]:focus,
+select:focus {
   border-color: var(--accent);
   background: #fff;
   box-shadow: 0 0 0 4px rgba(47, 111, 237, 0.14);
-}
-
-.checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 28px;
-  min-height: 42px;
-}
-
-.checkbox-row label {
-  margin: 0;
 }
 
 .actions {
@@ -206,7 +211,8 @@ button.secondary,
 button.danger,
 button.auth-tab,
 button.linkish,
-button.offer-pill {
+button.chip,
+select.status-select {
   font-family: inherit;
 }
 
@@ -283,9 +289,9 @@ button.danger:hover:not(:disabled) {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .stat {
@@ -302,6 +308,22 @@ button.danger:hover:not(:disabled) {
   font-weight: 750;
   letter-spacing: -0.04em;
   line-height: 1;
+}
+
+.stat.is-interviewing .stat-value {
+  color: var(--interviewing);
+}
+
+.stat.is-offer .stat-value {
+  color: var(--offer);
+}
+
+.stat.is-rejected .stat-value {
+  color: var(--rejected);
+}
+
+.stat.is-open .stat-value {
+  color: var(--accent);
 }
 
 .show-more {
@@ -392,20 +414,229 @@ button.linkish.danger-text {
   flex-wrap: wrap;
 }
 
-.offer-pill {
-  border: 0;
+/* A native select keeps the whole pipeline one click away, including
+   "Rejected", and stays keyboard-accessible. */
+.status-select {
+  appearance: none;
+  border: 1px solid transparent;
   border-radius: 999px;
-  padding: 5px 10px;
+  padding: 6px 26px 6px 11px;
   font-size: 12px;
   font-weight: 750;
   cursor: pointer;
-  background: var(--waiting-soft);
-  color: var(--waiting);
+  background-color: var(--applied-soft);
+  color: var(--applied);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 13px top 51%, right 9px top 51%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
 }
 
-.offer-pill.is-on {
+.status-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.status-select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status-select option {
+  color: var(--ink);
+  background: #fff;
+  font-weight: 600;
+}
+
+.status-select.is-interviewing {
+  background-color: var(--interviewing-soft);
+  color: var(--interviewing);
+}
+
+.status-select.is-offer {
+  background-color: var(--offer-soft);
+  color: var(--offer);
+}
+
+.status-select.is-rejected {
+  background-color: var(--rejected-soft);
+  color: var(--rejected);
+}
+
+.insights {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.insight {
+  background: var(--card);
+  border: 1px solid rgba(220, 227, 238, 0.9);
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: 0 6px 16px rgba(22, 32, 50, 0.04);
+}
+
+.insight-value {
+  display: block;
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.insight-label {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.insight-hint {
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.organizer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 13px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip-count {
+  font-size: 11px;
+  font-weight: 750;
+  background: #eef2f8;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.chip.is-active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+
+.chip.is-active .chip-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+.chip.is-active.is-offer {
+  background: var(--offer);
+  border-color: var(--offer);
+}
+
+.chip.is-active.is-rejected {
+  background: var(--rejected);
+  border-color: var(--rejected);
+}
+
+.chip.is-active.is-interviewing {
+  background: var(--interviewing);
+  border-color: var(--interviewing);
+}
+
+.organizer-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.search-field {
+  flex: 1 1 240px;
+  display: flex;
+  min-width: 0;
+}
+
+.search-field input {
+  width: 100%;
+}
+
+button.secondary.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px 4px;
+}
+
+.group-head h3 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.group-count {
+  font-size: 11px;
+  font-weight: 750;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--applied-soft);
+  color: var(--applied);
+}
+
+.group.is-interviewing .group-count {
+  background: var(--interviewing-soft);
+  color: var(--interviewing);
+}
+
+.group.is-offer .group-count {
   background: var(--offer-soft);
   color: var(--offer);
+}
+
+.group.is-rejected .group-count {
+  background: var(--rejected-soft);
+  color: var(--rejected);
 }
 
 tr.is-editing td {
@@ -457,6 +688,17 @@ td:last-child {
 
 .cell-strong {
   font-weight: 700;
+}
+
+.cell-stack {
+  display: block;
+}
+
+.cell-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .muted {
@@ -591,12 +833,24 @@ td:last-child {
     grid-template-columns: 1fr;
   }
 
-  .checkbox-row {
-    margin-top: 0;
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .stats {
-    grid-template-columns: 1fr;
+  .organizer-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filter-chips {
+    /* Six stage chips would wrap into a tall block on a phone. */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .chip {
+    flex: 0 0 auto;
   }
 
   table,
@@ -648,5 +902,9 @@ td:last-child {
   .row-actions {
     justify-content: flex-end;
     width: 100%;
+  }
+
+  .cell-stack {
+    text-align: right;
   }
 }

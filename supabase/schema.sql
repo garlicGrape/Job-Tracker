@@ -14,10 +14,23 @@ create table if not exists public.applications (
   company text not null,
   title text not null,
   date_applied text not null,
+  status text not null default 'applied',
   received_offer boolean not null default false,
   posting_url text not null default '',
   created_at timestamptz not null default now()
 );
+
+-- Pipeline stage. Tables created before stages existed only have the boolean
+-- offer flag, so add the column, derive it from that flag once, and only then
+-- make it required. Re-running finds no null rows and changes nothing.
+alter table public.applications add column if not exists status text;
+
+update public.applications
+set status = case when received_offer then 'offer' else 'applied' end
+where status is null;
+
+alter table public.applications alter column status set default 'applied';
+alter table public.applications alter column status set not null;
 
 -- Ordered index for the paged read the client uses. Without it, listing a
 -- large account re-sorts the whole partition on every page. Its leading
@@ -63,6 +76,17 @@ alter table public.applications add constraint applications_title_len
 alter table public.applications drop constraint if exists applications_date_applied_fmt;
 alter table public.applications add constraint applications_date_applied_fmt
   check (date_applied ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+
+alter table public.applications drop constraint if exists applications_status_valid;
+alter table public.applications add constraint applications_status_valid
+  check (status in ('applied', 'interviewing', 'offer', 'rejected'));
+
+-- received_offer is kept as a mirror of the offer stage so existing CSV
+-- exports and any older client still read the right value. This constraint is
+-- what stops the two from drifting apart when the REST API is called directly.
+alter table public.applications drop constraint if exists applications_offer_matches_stage;
+alter table public.applications add constraint applications_offer_matches_stage
+  check (received_offer = (status = 'offer'));
 
 alter table public.applications drop constraint if exists applications_posting_url_len;
 alter table public.applications add constraint applications_posting_url_len

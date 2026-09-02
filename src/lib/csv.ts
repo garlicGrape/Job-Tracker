@@ -1,5 +1,13 @@
-import { HEADERS, type Application } from './types';
-import { createApplication, escapeFormula, isValidDate, isValidHttpUrl, normalizePostingUrl, toBoolean } from './applications';
+import { HEADERS, STATUS_LABELS, type Application } from './types';
+import {
+  createApplication,
+  escapeFormula,
+  isValidDate,
+  isValidHttpUrl,
+  normalizePostingUrl,
+  normalizeStatus,
+  toBoolean
+} from './applications';
 
 function csvField(value: string): string {
   if (/[",\n\r]/.test(value)) {
@@ -11,6 +19,8 @@ function csvField(value: string): string {
 /**
  * Serialize applications to CSV. Formula-looking company/title values are
  * prefixed with an apostrophe so Excel / Sheets will not execute them.
+ * `Received Offer` stays in column 4 for older importers; `Status` carries
+ * the full stage.
  */
 export function applicationsToCsv(apps: Application[]): string {
   const lines = [HEADERS.join(',')];
@@ -21,7 +31,8 @@ export function applicationsToCsv(apps: Application[]): string {
         csvField(escapeFormula(app.title)),
         csvField(app.dateApplied),
         app.receivedOffer ? 'TRUE' : 'FALSE',
-        csvField(escapeFormula(app.postingUrl))
+        csvField(escapeFormula(app.postingUrl)),
+        csvField(escapeFormula(STATUS_LABELS[app.status]))
       ].join(',')
     );
   }
@@ -70,40 +81,108 @@ function unescapeImported(value: string): string {
   return trimmed;
 }
 
+type ColumnMap = {
+  company: number;
+  title: number;
+  dateApplied: number;
+  receivedOffer: number;
+  postingUrl: number;
+  status: number;
+};
+
+/** Column order used when a file has no header row. */
+const POSITIONAL_COLUMNS: ColumnMap = {
+  company: 0,
+  title: 1,
+  dateApplied: 2,
+  receivedOffer: 3,
+  postingUrl: 4,
+  status: 5
+};
+
+const HEADER_ALIASES: Record<string, keyof ColumnMap> = {
+  company: 'company',
+  employer: 'company',
+  title: 'title',
+  role: 'title',
+  position: 'title',
+  'date applied': 'dateApplied',
+  date: 'dateApplied',
+  applied: 'dateApplied',
+  'received offer': 'receivedOffer',
+  offer: 'receivedOffer',
+  'posting url': 'postingUrl',
+  url: 'postingUrl',
+  link: 'postingUrl',
+  posting: 'postingUrl',
+  status: 'status',
+  stage: 'status',
+  outcome: 'status'
+};
+
+/**
+ * Read a header row into column positions, so a sheet may reorder columns or
+ * omit the ones added later. Returns null when the row is data, not a header.
+ */
+function parseHeader(cols: string[]): ColumnMap | null {
+  const names = cols.map((c) => c.trim().toLowerCase());
+  if (names[0] !== 'company' || names[1] !== 'title') {
+    return null;
+  }
+  const map: ColumnMap = {
+    company: -1,
+    title: -1,
+    dateApplied: -1,
+    receivedOffer: -1,
+    postingUrl: -1,
+    status: -1
+  };
+  names.forEach((name, index) => {
+    const field = HEADER_ALIASES[name];
+    if (field && map[field] < 0) {
+      map[field] = index;
+    }
+  });
+  return map;
+}
+
+function cell(cols: string[], index: number): string {
+  return index < 0 ? '' : cols[index] ?? '';
+}
+
 /**
  * Parse a CSV produced by this app (or a Google Sheet export with the same
- * headers) into application records. A 4-column sheet without Posting URL
- * still imports; that field is left blank. Invalid rows are skipped.
+ * headers) into application records. Files written before stages existed
+ * still import: `Received Offer` alone decides between offer and applied.
+ * Invalid rows are skipped.
  */
 export function parseApplicationsCsv(text: string): Application[] {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const lines = normalized.split('\n').filter((line) => line.trim() !== '');
   if (lines.length === 0) return [];
 
-  const start = looksLikeHeader(splitCsvLine(lines[0])) ? 1 : 0;
+  const header = parseHeader(splitCsvLine(lines[0]));
+  const columns = header ?? POSITIONAL_COLUMNS;
   const apps: Application[] = [];
-  for (let i = start; i < lines.length; i++) {
+  for (let i = header ? 1 : 0; i < lines.length; i++) {
     const cols = splitCsvLine(lines[i]);
-    const company = unescapeImported(cols[0] ?? '');
-    const title = unescapeImported(cols[1] ?? '');
-    const dateApplied = (cols[2] ?? '').trim();
-    const receivedOffer = toBoolean((cols[3] ?? '').trim());
-    const normalizedUrl = normalizePostingUrl(unescapeImported(cols[4] ?? ''));
+    const company = unescapeImported(cell(cols, columns.company));
+    const title = unescapeImported(cell(cols, columns.title));
+    const dateApplied = cell(cols, columns.dateApplied).trim();
+    const receivedOffer = toBoolean(cell(cols, columns.receivedOffer).trim());
+    const rawStatus = unescapeImported(cell(cols, columns.status));
+    const status = normalizeStatus(rawStatus, receivedOffer ? 'offer' : 'applied');
+    const normalizedUrl = normalizePostingUrl(unescapeImported(cell(cols, columns.postingUrl)));
     const postingUrl = isValidHttpUrl(normalizedUrl) ? normalizedUrl : '';
     if (!company && !title) continue;
     if (!isValidDate(dateApplied)) continue;
     try {
-      apps.push(createApplication({ company, title, dateApplied, receivedOffer, postingUrl }));
+      apps.push(createApplication({ company, title, dateApplied, status, postingUrl }));
     } catch {
       // Skip rows that fail the same validation the form uses.
     }
   }
   return apps;
-}
-
-function looksLikeHeader(cols: string[]): boolean {
-  const joined = cols.map((c) => c.trim().toLowerCase()).join('|');
-  return joined.startsWith('company|title|date applied|');
 }
 
 export function downloadCsv(filename: string, csv: string): void {

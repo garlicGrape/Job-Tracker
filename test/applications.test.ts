@@ -4,6 +4,7 @@ import {
   getApplications,
   removeApplication,
   setOffer,
+  setStatus,
   updateApplication
 } from '../src/lib/store';
 import { createMemoryStorage, storedRows } from './harness';
@@ -220,8 +221,8 @@ describe('removeApplication', () => {
   });
 });
 
-describe('legacy records without postingUrl', () => {
-  it('loads four-field JSON and defaults postingUrl to empty', () => {
+describe('legacy records without postingUrl or status', () => {
+  it('loads four-field JSON, defaults postingUrl to empty, and derives the stage', () => {
     const storage = createMemoryStorage({
       'job-tracker.applications': JSON.stringify([
         {
@@ -239,10 +240,65 @@ describe('legacy records without postingUrl', () => {
         company: 'Acme',
         title: 'Dev',
         dateApplied: '2026-08-20',
+        status: 'applied',
         receivedOffer: false,
         postingUrl: ''
       }
     ]);
+  });
+
+  it('reads a legacy offer flag as the offer stage', () => {
+    const storage = createMemoryStorage({
+      'job-tracker.applications': JSON.stringify([
+        {
+          id: 'legacy-2',
+          company: 'Acme',
+          title: 'Dev',
+          dateApplied: '2026-08-20',
+          receivedOffer: true
+        }
+      ])
+    });
+    expect(getApplications(storage)[0].status).toBe('offer');
+  });
+});
+
+describe('setStatus', () => {
+  it('moves one application to rejected and keeps the offer mirror in sync', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-08-20',
+      status: 'offer'
+    });
+    expect(first.receivedOffer).toBe(true);
+    const next = setStatus(storage, first.id, 'rejected');
+    expect(next[0].status).toBe('rejected');
+    expect(next[0].receivedOffer).toBe(false);
+    expect(getApplications(storage)[0].status).toBe('rejected');
+  });
+
+  it('does not touch other applications', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, {
+      company: 'Acme',
+      title: 'Dev',
+      dateApplied: '2026-08-20'
+    });
+    addApplication(storage, { company: 'Globex', title: 'PM', dateApplied: '2026-08-25' });
+    const secondId = getApplications(storage)[1].id;
+    setStatus(storage, secondId, 'interviewing');
+    const apps = getApplications(storage);
+    expect(apps.find((a) => a.id === first.id)?.status).toBe('applied');
+    expect(apps.find((a) => a.id === secondId)?.status).toBe('interviewing');
+  });
+
+  it('rejects a missing id', () => {
+    const storage = createMemoryStorage();
+    addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-08-20' });
+    expect(() => setStatus(storage, 'missing-id', 'rejected')).toThrow(/not found/i);
+    expect(() => setStatus(storage, '', 'rejected')).toThrow(/invalid application id/i);
   });
 });
 
