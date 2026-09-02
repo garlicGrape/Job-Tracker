@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeMetrics, countByStatus } from '../src/lib/metrics';
+import { addDays, computeMetrics, countByStatus, weekStartOf, weeklyActivity } from '../src/lib/metrics';
 import { createApplication, daysBetween, todayIsoDate } from '../src/lib/applications';
 import type { ApplicationInput } from '../src/lib/types';
 
@@ -147,5 +147,48 @@ describe('computeMetrics', () => {
     const live = computeMetrics([app({ company: 'Acme', title: 'Dev', dateApplied: todayIsoDate() })]);
     expect(live.appliedLast7Days).toBe(1);
     expect(live.avgOpenAgeDays).toBe(0);
+  });
+});
+
+describe('weeklyActivity', () => {
+  it('adds days across month and year boundaries', () => {
+    expect(addDays('2026-08-31', 1)).toBe('2026-09-01');
+    expect(addDays('2026-01-01', -1)).toBe('2025-12-31');
+    expect(addDays('2026-02-28', 1)).toBe('2026-03-01');
+  });
+
+  it('finds the Monday of a week', () => {
+    expect(weekStartOf('2026-09-02')).toBe('2026-08-31'); // Wednesday
+    expect(weekStartOf('2026-08-31')).toBe('2026-08-31'); // Monday
+    expect(weekStartOf('2026-09-06')).toBe('2026-08-31'); // Sunday
+    expect(weekStartOf('2026-09-07')).toBe('2026-09-07'); // next Monday
+  });
+
+  it('returns empty buckets, oldest first and the current week last', () => {
+    const weeks = weeklyActivity([], '2026-09-02', 8);
+    expect(weeks).toHaveLength(8);
+    expect(weeks[0].weekStart).toBe('2026-07-13');
+    expect(weeks[7].weekStart).toBe('2026-08-31');
+    expect(weeks.every((w) => w.count === 0)).toBe(true);
+  });
+
+  it('buckets applications by Monday-start week and drops dates outside the window', () => {
+    const apps = [
+      app({ company: 'A', title: 'Dev', dateApplied: '2026-08-31' }), // Monday of this week
+      app({ company: 'B', title: 'Dev', dateApplied: '2026-09-02' }), // today
+      app({ company: 'C', title: 'Dev', dateApplied: '2026-09-06' }), // Sunday, still this week
+      app({ company: 'D', title: 'Dev', dateApplied: '2026-09-07' }), // next week, excluded
+      app({ company: 'E', title: 'Dev', dateApplied: '2026-08-30' }), // Sunday of last week
+      app({ company: 'F', title: 'Dev', dateApplied: '2026-08-24' }), // Monday of last week
+      app({ company: 'G', title: 'Dev', dateApplied: '2026-07-13' }), // oldest bucket
+      app({ company: 'H', title: 'Dev', dateApplied: '2026-07-12' }) // before the window
+    ];
+    expect(weeklyActivity(apps, '2026-09-02', 8).map((w) => w.count)).toEqual([
+      1, 0, 0, 0, 0, 0, 2, 3
+    ]);
+  });
+
+  it('never returns fewer than one bucket', () => {
+    expect(weeklyActivity([], '2026-09-02', 0)).toHaveLength(1);
   });
 });

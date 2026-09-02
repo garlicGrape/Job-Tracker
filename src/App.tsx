@@ -3,7 +3,7 @@ import { createAccountApiFromConfig, type AccountApi, type PublicUser } from './
 import { loadSupabaseConfig } from './lib/supabase-config';
 import { applicationsToCsv, downloadCsv, parseApplicationsCsv } from './lib/csv';
 import { LIMITS, assertCsvByteSize, daysBetween, todayIsoDate } from './lib/applications';
-import { computeMetrics } from './lib/metrics';
+import { computeMetrics, weeklyActivity } from './lib/metrics';
 import {
   SORT_OPTIONS,
   STATUS_FILTERS,
@@ -21,6 +21,14 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 // thousands of rows in the DOM at once.
 const ROWS_PER_CHUNK = 250;
 
+// Calendar weeks shown in the activity chart, current week included.
+const WEEKS_SHOWN = 8;
+
+// Segment order for the pipeline bar: closest to a job first. Neighbouring
+// colors were checked for color-vision separation in this order; the 2px gaps
+// and the labeled legend carry identity where hue alone is close.
+const BAR_ORDER: readonly ApplicationStatus[] = ['offer', 'interviewing', 'applied', 'rejected'];
+
 function isSafeHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
@@ -33,6 +41,19 @@ function formatDisplayDate(iso: string): string {
   const day = Number(parts[2]);
   if (!year || month < 1 || month > 12 || !day) return iso;
   return `${MONTHS[month - 1]} ${day}, ${year}`;
+}
+
+function formatShortDate(iso: string): string {
+  const parts = iso.split('-');
+  if (parts.length !== 3) return iso;
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (month < 1 || month > 12 || !day) return iso;
+  return `${MONTHS[month - 1]} ${day}`;
+}
+
+function percentOf(part: number, whole: number): string {
+  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : '0%';
 }
 
 function formatAge(dateApplied: string, today: string): string {
@@ -276,6 +297,11 @@ export default function App() {
 
   const today = todayIsoDate();
   const metrics = useMemo(() => computeMetrics(applications, today), [applications, today]);
+  const weekly = useMemo(
+    () => weeklyActivity(applications, today, WEEKS_SHOWN),
+    [applications, today]
+  );
+  const weeklyMax = Math.max(1, ...weekly.map((week) => week.count));
   const organized = useMemo(
     () => organizeApplications(applications, { query, status: statusFilter, sort }),
     [applications, query, statusFilter, sort]
@@ -714,6 +740,86 @@ export default function App() {
                 </div>
               ))}
             </div>
+
+            {metrics.total > 0 ? (
+              <div className="charts">
+                <div className="card chart-card">
+                  <div className="chart-head">
+                    <h3>Pipeline</h3>
+                    <p className="chart-lede">Where every listing stands right now.</p>
+                  </div>
+                  <div
+                    className="pipeline-bar"
+                    role="img"
+                    aria-label={BAR_ORDER.map(
+                      (status) => `${STATUS_LABELS[status]} ${metrics.counts[status]}`
+                    ).join(', ')}
+                  >
+                    {BAR_ORDER.filter((status) => metrics.counts[status] > 0).map((status) => (
+                      <span
+                        key={status}
+                        className={`pipeline-segment is-${status}`}
+                        style={{ flexGrow: metrics.counts[status] }}
+                        title={`${STATUS_LABELS[status]}: ${metrics.counts[status]} (${percentOf(
+                          metrics.counts[status],
+                          metrics.total
+                        )})`}
+                      />
+                    ))}
+                  </div>
+                  <ul className="legend">
+                    {BAR_ORDER.map((status) => (
+                      <li key={status}>
+                        <span className={`swatch is-${status}`} aria-hidden="true" />
+                        <span className="legend-label">{STATUS_LABELS[status]}</span>
+                        <span className="legend-value">
+                          {metrics.counts[status]}
+                          <span className="muted"> · {percentOf(metrics.counts[status], metrics.total)}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="card chart-card">
+                  <div className="chart-head">
+                    <h3>Applications per week</h3>
+                    <p className="chart-lede">Last {WEEKS_SHOWN} weeks, Monday to Sunday.</p>
+                  </div>
+                  <div
+                    className="weekly"
+                    role="img"
+                    aria-label={weekly
+                      .map((week) => `week of ${formatShortDate(week.weekStart)}: ${week.count}`)
+                      .join(', ')}
+                  >
+                    {weekly.map((week, index) => {
+                      const isCurrent = index === weekly.length - 1;
+                      return (
+                        <div
+                          key={week.weekStart}
+                          className={isCurrent ? 'week is-current' : 'week'}
+                          title={`Week of ${formatDisplayDate(week.weekStart)}: ${week.count} application${
+                            week.count === 1 ? '' : 's'
+                          }`}
+                        >
+                          <span className="week-count">{week.count > 0 ? week.count : ''}</span>
+                          <span className="week-track">
+                            <span
+                              className="week-bar"
+                              style={{ height: `${(week.count / weeklyMax) * 100}%` }}
+                            />
+                          </span>
+                          <span className="week-label">
+                            {isCurrent ? 'This wk' : formatShortDate(week.weekStart)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="card form-card">
               <div className="card-head">

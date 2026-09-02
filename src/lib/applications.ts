@@ -281,6 +281,9 @@ export function mapDatabaseError(message: string): string {
   if (lower.includes('applications_status')) {
     return `Status must be one of: ${STATUSES.join(', ')}.`;
   }
+  if (lower.includes('column') && lower.includes('status') && lower.includes('does not exist')) {
+    return 'Database schema is out of date. Re-run supabase/schema.sql in the Supabase SQL editor.';
+  }
   if (lower.includes('applications_posting_url')) {
     return `Posting URL must be a valid http or https URL (max ${LIMITS.maxPostingUrlLength} characters).`;
   }
