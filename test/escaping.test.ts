@@ -11,7 +11,7 @@ function sampleApp(overrides: Partial<Application> = {}): Application {
     company: 'Acme',
     title: 'Dev',
     dateApplied: '2026-08-20',
-    receivedOffer: false,
+    status: 'applied',
     postingUrl: '',
     ...overrides
   };
@@ -73,10 +73,10 @@ describe('formula-injection escaping (CSV)', () => {
 
 describe('CSV round-trip', () => {
   it('exports a header row and one data row', () => {
-    const csv = applicationsToCsv([sampleApp({ receivedOffer: true })]);
+    const csv = applicationsToCsv([sampleApp({ status: 'offer' })]);
     const lines = csv.trim().split(/\r?\n/);
-    expect(lines[0]).toBe('Company,Title,Date Applied,Received Offer,Posting URL');
-    expect(splitCsvLine(lines[1])).toEqual(['Acme', 'Dev', '2026-08-20', 'TRUE', '']);
+    expect(lines[0]).toBe('Company,Title,Date Applied,Status,Posting URL');
+    expect(splitCsvLine(lines[1])).toEqual(['Acme', 'Dev', '2026-08-20', 'Offer', '']);
   });
 
   it('quotes fields that contain commas', () => {
@@ -107,10 +107,70 @@ describe('CSV round-trip', () => {
       company: 'Acme',
       title: 'Frontend',
       dateApplied: '2026-08-20',
-      receivedOffer: true,
+      status: 'offer',
       postingUrl: ''
     });
-    expect(apps[1].receivedOffer).toBe(false);
+    expect(apps[1].status).toBe('applied');
+  });
+
+  it('round-trips every status through the Status column', () => {
+    const apps: Application[] = [
+      sampleApp({ id: '1', status: 'applied' }),
+      sampleApp({ id: '2', status: 'interviewing' }),
+      sampleApp({ id: '3', status: 'offer' }),
+      sampleApp({ id: '4', status: 'rejected' })
+    ];
+    const csv = applicationsToCsv(apps);
+    const lines = csv.trim().split(/\r?\n/);
+    expect(lines.slice(1).map((l) => splitCsvLine(l)[3])).toEqual([
+      'Applied',
+      'Interviewing',
+      'Offer',
+      'Rejected'
+    ]);
+    expect(parseApplicationsCsv(csv).map((a) => a.status)).toEqual([
+      'applied',
+      'interviewing',
+      'offer',
+      'rejected'
+    ]);
+  });
+
+  it('reads status case-insensitively and treats unknown values as applied', () => {
+    const csv = [
+      'Company,Title,Date Applied,Status,Posting URL',
+      'A,Dev,2026-01-01,REJECTED,',
+      'B,Dev,2026-01-01,interview,',
+      'C,Dev,2026-01-01,something else,',
+      'D,Dev,2026-01-01,,'
+    ].join('\n');
+    expect(parseApplicationsCsv(csv).map((a) => a.status)).toEqual([
+      'rejected',
+      'interviewing',
+      'applied',
+      'applied'
+    ]);
+  });
+
+  it('imports a legacy export whose Received Offer column sits after Posting URL', () => {
+    const csv = [
+      'Company,Title,Posting URL,Date Applied,Received Offer',
+      'Acme,Dev,https://jobs.acme.test/dev,2026-08-20,TRUE'
+    ].join('\n');
+    const apps = parseApplicationsCsv(csv);
+    expect(apps).toHaveLength(1);
+    expect(apps[0]).toMatchObject({
+      company: 'Acme',
+      dateApplied: '2026-08-20',
+      status: 'offer',
+      postingUrl: 'https://jobs.acme.test/dev'
+    });
+  });
+
+  it('imports a headerless file positionally, accepting TRUE or a status name', () => {
+    const csv = ['Acme,Dev,2026-08-20,TRUE,', 'Globex,PM,2026-08-21,Rejected,'].join('\n');
+    const apps = parseApplicationsCsv(csv);
+    expect(apps.map((a) => a.status)).toEqual(['offer', 'rejected']);
   });
 
   it('parses a five-column export that includes posting URLs', () => {

@@ -11,7 +11,9 @@ export, not the database. It is not a Google Apps Script project.
 - `src/lib/supabase-account.ts` — injected Supabase client; Auth + `applications`. Reads are paged.
 - `src/lib/supabase-config.ts` — publishable-key parsing; runtime `config.json`.
 - `src/lib/store.ts` — `{ getItem, setItem }` helpers used by unit tests.
-- `src/lib/csv.ts` — CSV export / import.
+- `src/lib/csv.ts` — CSV export / import (header-aware; legacy `Received Offer` still imports).
+- `src/lib/organize.ts` — search, status filter, sort for the table.
+- `src/lib/metrics.ts` — pipeline metrics; pure, takes `today` as `YYYY-MM-DD`.
 - `supabase/schema.sql` — table, RLS, field CHECKs, write-rate trigger. Run in the SQL editor.
 - `test/*.test.ts` — Vitest suites that import `src/lib` directly.
 
@@ -29,6 +31,12 @@ export, not the database. It is not a Google Apps Script project.
   Sheets. Storage itself keeps the original string so the table stays readable.
 - **Store dates as `YYYY-MM-DD` text, never `Date` objects.** The Postgres
   column is `text` (`date_applied`) for the same reason.
+- **Status is the enum in `STATUSES`** (`applied`, `interviewing`, `offer`,
+  `rejected`). Adding a stage means updating `types.ts`, `STATUS_LABELS`,
+  `parseStatus`, the `applications_status_valid` CHECK in `schema.sql`, and
+  `STATUS_ORDER` in `organize.ts`. The old `received_offer` column is dropped
+  by the schema migration; `receivedOffer` survives only as a legacy input
+  (`true` → `offer`).
 - **Listings are unlimited. Do not reintroduce a per-account row cap.** Abuse is
   bounded by row size (`CHECK`s) and write rate (5,000 rows per statement,
   20,000 per hour), which hold at any table size. `LIMITS` in

@@ -5,7 +5,7 @@
  * Lovable restyle should call these helpers rather than reimplementing
  * validation or CSV rules.
  */
-import type { Application, ApplicationInput } from './types';
+import { STATUSES, type Application, type ApplicationInput, type ApplicationStatus } from './types';
 
 /**
  * Abuse / integrity limits. Postgres CHECKs and the write-rate trigger in
@@ -39,6 +39,56 @@ export function toBoolean(value: unknown): boolean {
     value === 'YES' ||
     value === 'yes'
   );
+}
+
+export const STATUS_LABELS: Record<ApplicationStatus, string> = {
+  applied: 'Applied',
+  interviewing: 'Interviewing',
+  offer: 'Offer',
+  rejected: 'Rejected'
+};
+
+export function isApplicationStatus(value: unknown): value is ApplicationStatus {
+  return typeof value === 'string' && (STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * Read a status from free text: the stored key, its label, or a few common
+ * spellings ("interview", "declined"). Returns null when nothing matches.
+ */
+export function parseStatus(value: unknown): ApplicationStatus | null {
+  if (value == null) return null;
+  const text = String(value).trim().toLowerCase();
+  if (!text) return null;
+  if (isApplicationStatus(text)) return text;
+  if (text === 'interview' || text === 'interviewing' || text === 'phone screen' || text === 'onsite') {
+    return 'interviewing';
+  }
+  if (text === 'offered' || text === 'accepted' || text === 'hired') return 'offer';
+  if (text === 'declined' || text === 'rejection' || text === 'no' || text === 'closed') {
+    return 'rejected';
+  }
+  if (text === 'waiting' || text === 'pending' || text === 'submitted' || text === 'open') {
+    return 'applied';
+  }
+  return null;
+}
+
+/**
+ * Resolve the status for a payload. A missing status falls back to the
+ * legacy Received Offer flag (TRUE means offer, anything else applied).
+ * A present but unrecognized status is an error rather than a silent reset.
+ */
+export function resolveStatus(status: unknown, receivedOffer?: unknown): ApplicationStatus {
+  const text = status == null ? '' : String(status).trim();
+  if (!text) {
+    return toBoolean(receivedOffer) ? 'offer' : 'applied';
+  }
+  const parsed = parseStatus(text);
+  if (!parsed) {
+    throw new Error(`Status must be one of: ${STATUSES.join(', ')}.`);
+  }
+  return parsed;
 }
 
 /**
@@ -113,6 +163,7 @@ export function validateApplication(
   const title = (app.title == null ? '' : String(app.title)).trim();
   const dateApplied = (app.dateApplied == null ? '' : String(app.dateApplied)).trim();
   const postingUrl = normalizePostingUrl(app.postingUrl);
+  const status = resolveStatus(app.status, app.receivedOffer);
 
   if (!company) {
     throw new Error('Company is required.');
@@ -140,7 +191,7 @@ export function validateApplication(
     company,
     title,
     dateApplied,
-    receivedOffer: toBoolean(app.receivedOffer),
+    status,
     postingUrl
   };
 }
@@ -198,6 +249,12 @@ export function mapDatabaseError(message: string): string {
   }
   if (lower.includes('applications_date_applied_fmt')) {
     return 'Date Applied must be a valid date in YYYY-MM-DD format.';
+  }
+  if (lower.includes('applications_status_valid')) {
+    return `Status must be one of: ${STATUSES.join(', ')}.`;
+  }
+  if (lower.includes('column') && lower.includes('status') && lower.includes('does not exist')) {
+    return 'Database schema is out of date. Re-run supabase/schema.sql in the Supabase SQL editor.';
   }
   if (lower.includes('applications_posting_url')) {
     return `Posting URL must be a valid http or https URL (max ${LIMITS.maxPostingUrlLength} characters).`;

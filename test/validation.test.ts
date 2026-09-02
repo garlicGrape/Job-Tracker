@@ -65,7 +65,7 @@ describe('validation', () => {
       dateApplied: '2026-01-01',
       receivedOffer: 'true'
     });
-    expect(yes[0].receivedOffer).toBe(true);
+    expect(yes[0].status).toBe('offer');
 
     const storage2 = createMemoryStorage();
     const missing = addApplication(storage2, {
@@ -73,7 +73,45 @@ describe('validation', () => {
       title: 'B',
       dateApplied: '2026-01-01'
     });
-    expect(missing[0].receivedOffer).toBe(false);
+    expect(missing[0].status).toBe('applied');
+  });
+
+  it('accepts a status by key or label, case-insensitively', () => {
+    for (const [input, expected] of [
+      ['rejected', 'rejected'],
+      ['Rejected', 'rejected'],
+      ['INTERVIEWING', 'interviewing'],
+      ['Offer', 'offer'],
+      ['applied', 'applied']
+    ] as const) {
+      const storage = createMemoryStorage();
+      const apps = addApplication(storage, {
+        company: 'A',
+        title: 'B',
+        dateApplied: '2026-01-01',
+        status: input
+      });
+      expect(apps[0].status).toBe(expected);
+    }
+  });
+
+  it('prefers an explicit status over the legacy offer flag', () => {
+    const storage = createMemoryStorage();
+    const apps = addApplication(storage, {
+      company: 'A',
+      title: 'B',
+      dateApplied: '2026-01-01',
+      status: 'rejected',
+      receivedOffer: true
+    });
+    expect(apps[0].status).toBe('rejected');
+  });
+
+  it('rejects an unknown status', () => {
+    const storage = createMemoryStorage();
+    expect(() =>
+      addApplication(storage, { company: 'A', title: 'B', dateApplied: '2026-01-01', status: 'ghosted' })
+    ).toThrow(/status must be one of/i);
   });
 
   it('accepts an omitted posting URL', () => {

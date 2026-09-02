@@ -1,12 +1,20 @@
-import { STORAGE_KEY, type Application, type ApplicationInput } from './types';
-import { createApplication, isValidHttpUrl, toBoolean } from './applications';
+import { STORAGE_KEY, type Application, type ApplicationInput, type ApplicationStatus } from './types';
+import { createApplication, isApplicationStatus, isValidHttpUrl, resolveStatus } from './applications';
 
 export type KeyValueStorage = {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 };
 
-type StoredApplication = Omit<Application, 'postingUrl'> & { postingUrl?: string };
+/**
+ * What may be on disk: the current shape, plus older records that carried a
+ * `receivedOffer` boolean instead of `status` and/or no `postingUrl`.
+ */
+type StoredApplication = Omit<Application, 'postingUrl' | 'status'> & {
+  postingUrl?: string;
+  status?: string;
+  receivedOffer?: boolean;
+};
 
 function isApplicationRecord(value: unknown): value is StoredApplication {
   if (!value || typeof value !== 'object') return false;
@@ -16,15 +24,26 @@ function isApplicationRecord(value: unknown): value is StoredApplication {
     typeof rec.company === 'string' &&
     typeof rec.title === 'string' &&
     typeof rec.dateApplied === 'string' &&
-    typeof rec.receivedOffer === 'boolean' &&
+    (rec.status === undefined || typeof rec.status === 'string') &&
+    (rec.receivedOffer === undefined || typeof rec.receivedOffer === 'boolean') &&
+    (rec.status !== undefined || rec.receivedOffer !== undefined) &&
     (rec.postingUrl === undefined || typeof rec.postingUrl === 'string')
   );
 }
 
-function withPostingUrl(app: StoredApplication): Application {
+function upgradeRecord(app: StoredApplication): Application {
   const postingUrl = app.postingUrl ?? '';
+  const status: ApplicationStatus = isApplicationStatus(app.status)
+    ? app.status
+    : app.receivedOffer
+      ? 'offer'
+      : 'applied';
   return {
-    ...app,
+    id: app.id,
+    company: app.company,
+    title: app.title,
+    dateApplied: app.dateApplied,
+    status,
     postingUrl: isValidHttpUrl(postingUrl) ? postingUrl : ''
   };
 }
@@ -35,7 +54,7 @@ export function getApplications(storage: KeyValueStorage): Application[] {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isApplicationRecord).map(withPostingUrl);
+    return parsed.filter(isApplicationRecord).map(upgradeRecord);
   } catch {
     return [];
   }
@@ -97,25 +116,27 @@ export function removeApplication(storage: KeyValueStorage, id: string): Applica
 }
 
 /**
- * Toggle the "Received Offer" flag for a specific application id.
+ * Move one application to a new pipeline stage (applied, interviewing,
+ * offer, rejected). Accepts the same spellings the form and CSV do.
  */
-export function setOffer(
+export function setStatus(
   storage: KeyValueStorage,
   id: string,
-  received: unknown
+  status: unknown
 ): Application[] {
   if (!id || typeof id !== 'string') {
     throw new Error('Invalid application id.');
   }
+  const next = resolveStatus(status);
   const apps = getApplications(storage);
   const idx = apps.findIndex((a) => a.id === id);
   if (idx < 0) {
     throw new Error('Application not found.');
   }
-  const next = apps.map((a, i) =>
-    i === idx ? { ...a, receivedOffer: toBoolean(received) } : a
+  return persist(
+    storage,
+    apps.map((a, i) => (i === idx ? { ...a, status: next } : a))
   );
-  return persist(storage, next);
 }
 
 /**

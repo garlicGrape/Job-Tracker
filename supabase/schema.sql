@@ -14,10 +14,31 @@ create table if not exists public.applications (
   company text not null,
   title text not null,
   date_applied text not null,
-  received_offer boolean not null default false,
+  status text not null default 'applied',
   posting_url text not null default '',
   created_at timestamptz not null default now()
 );
+
+-- Pipeline stage. Upgrade path from the boolean received_offer column: add
+-- status, carry TRUE over as 'offer', then drop the old column. Each step is
+-- skipped when it has already run, so re-running this file is safe.
+alter table public.applications
+  add column if not exists status text not null default 'applied';
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'applications'
+      and column_name = 'received_offer'
+  ) then
+    update public.applications
+      set status = 'offer'
+      where received_offer and status = 'applied';
+    alter table public.applications drop column received_offer;
+  end if;
+end $$;
 
 -- Ordered index for the paged read the client uses. Without it, listing a
 -- large account re-sorts the whole partition on every page. Its leading
@@ -63,6 +84,10 @@ alter table public.applications add constraint applications_title_len
 alter table public.applications drop constraint if exists applications_date_applied_fmt;
 alter table public.applications add constraint applications_date_applied_fmt
   check (date_applied ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+
+alter table public.applications drop constraint if exists applications_status_valid;
+alter table public.applications add constraint applications_status_valid
+  check (status in ('applied', 'interviewing', 'offer', 'rejected'));
 
 alter table public.applications drop constraint if exists applications_posting_url_len;
 alter table public.applications add constraint applications_posting_url_len

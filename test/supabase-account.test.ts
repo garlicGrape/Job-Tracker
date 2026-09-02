@@ -33,6 +33,9 @@ function createFakeSupabase() {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date_applied)) {
       return 'new row for relation "applications" violates check constraint "applications_date_applied_fmt"';
     }
+    if (!['applied', 'interviewing', 'offer', 'rejected'].includes(row.status)) {
+      return 'new row for relation "applications" violates check constraint "applications_status_valid"';
+    }
     const url = row.posting_url ?? '';
     if (url.length > LIMITS.maxPostingUrlLength) {
       return 'new row for relation "applications" violates check constraint "applications_posting_url_len"';
@@ -145,7 +148,12 @@ function createFakeSupabase() {
         for (const row of rows) {
           if (row.user_id !== current!.id) continue;
           const ok = state.filters.every(([col, val]) => (row as Record<string, unknown>)[col] === val);
-          if (ok) Object.assign(row, patch);
+          if (!ok) continue;
+          const constraint = constraintError({ ...row, ...patch });
+          if (constraint) {
+            return { data: null, error: { message: constraint } };
+          }
+          Object.assign(row, patch);
         }
         return { data: null, error: null };
       }
@@ -219,7 +227,7 @@ describe('row mapping', () => {
       company: 'Acme',
       title: 'Dev',
       dateApplied: '2026-09-01',
-      receivedOffer: false,
+      status: 'applied',
       postingUrl: 'https://jobs.example.com/role'
     });
     expect(typeof row.date_applied).toBe('string');
@@ -241,7 +249,7 @@ describe('Supabase account API', () => {
       company: 'SecretCo',
       title: 'Staff Engineer',
       dateApplied: '2026-09-01',
-      receivedOffer: true,
+      status: 'offer',
       postingUrl: 'https://jobs.example.com/role'
     });
     await api.signOut();
@@ -250,7 +258,7 @@ describe('Supabase account API', () => {
     const list = await api.list();
     expect(list).toHaveLength(1);
     expect(list[0].company).toBe('SecretCo');
-    expect(list[0].receivedOffer).toBe(true);
+    expect(list[0].status).toBe('offer');
   });
 
   it('does not show another account’s listings', async () => {
@@ -297,6 +305,45 @@ describe('Supabase account API', () => {
     await api.signOut();
     await api.signIn('ada@example.com', 'password1');
     expect((await api.list()).map((a) => a.company)).toEqual(['AdaCorp']);
+  });
+
+  it('moves a listing to rejected and keeps it there across sign-in', async () => {
+    const api = createSupabaseAccountApi(createFakeSupabase());
+    await api.signUp('me@example.com', 'correct-horse');
+    await api.add({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01' });
+    await api.add({ company: 'Globex', title: 'PM', dateApplied: '2026-02-01' });
+    const [acme, globex] = await api.list();
+    expect(acme.status).toBe('applied');
+    const after = await api.setStatus(acme.id, 'rejected');
+    expect(after.find((a) => a.id === acme.id)?.status).toBe('rejected');
+    expect(after.find((a) => a.id === globex.id)?.status).toBe('applied');
+    await api.signOut();
+    await api.signIn('me@example.com', 'correct-horse');
+    expect((await api.list()).map((a) => a.status)).toEqual(['rejected', 'applied']);
+  });
+
+  it('rejects an unknown status before touching the table', async () => {
+    const api = createSupabaseAccountApi(createFakeSupabase());
+    await api.signUp('me@example.com', 'correct-horse');
+    await api.add({ company: 'Acme', title: 'Dev', dateApplied: '2026-01-01' });
+    const [acme] = await api.list();
+    await expect(api.setStatus(acme.id, 'ghosted' as never)).rejects.toThrow(/status must be one of/i);
+    await expect(api.setStatus('', 'rejected')).rejects.toThrow(/invalid application id/i);
+    expect((await api.list())[0].status).toBe('applied');
+  });
+
+  it('reads an unexpected stored status as applied instead of crashing', () => {
+    expect(
+      fromRow({
+        id: 'x',
+        user_id: 'u',
+        company: 'Acme',
+        title: 'Dev',
+        date_applied: '2026-01-01',
+        status: 'weird',
+        posting_url: null
+      }).status
+    ).toBe('applied');
   });
 
   it('rejects remove without a valid id', async () => {
@@ -384,6 +431,12 @@ describe('Supabase account API', () => {
     expect(
       mapDatabaseError('Too many listings added in the past hour. Try again later.')
     ).toMatch(/past hour/);
+    expect(mapDatabaseError('violates check constraint "applications_status_valid"')).toMatch(
+      /status must be one of/i
+    );
+    expect(mapDatabaseError('column applications.status does not exist')).toMatch(
+      /re-run supabase\/schema\.sql/i
+    );
     expect(mapDatabaseError('Auth session missing!')).toBe('Auth session missing!');
   });
 });

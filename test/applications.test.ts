@@ -3,7 +3,7 @@ import {
   addApplication,
   getApplications,
   removeApplication,
-  setOffer,
+  setStatus,
   updateApplication
 } from '../src/lib/store';
 import { createMemoryStorage, storedRows } from './harness';
@@ -25,13 +25,13 @@ describe('reading applications', () => {
       company: 'Acme',
       title: 'Frontend',
       dateApplied: '2026-08-20',
-      receivedOffer: true
+      status: 'offer'
     });
     addApplication(storage, {
       company: 'Globex',
       title: 'Backend',
       dateApplied: '2026-08-25',
-      receivedOffer: false
+      status: 'applied'
     });
     const apps = getApplications(storage);
     expect(apps).toHaveLength(2);
@@ -39,14 +39,14 @@ describe('reading applications', () => {
       company: 'Acme',
       title: 'Frontend',
       dateApplied: '2026-08-20',
-      receivedOffer: true,
+      status: 'offer',
       postingUrl: ''
     });
     expect(apps[1]).toMatchObject({
       company: 'Globex',
       title: 'Backend',
       dateApplied: '2026-08-25',
-      receivedOffer: false,
+      status: 'applied',
       postingUrl: ''
     });
     expect(apps[0].id).not.toBe(apps[1].id);
@@ -61,19 +61,23 @@ describe('reading applications', () => {
   });
 });
 
-describe('setOffer', () => {
-  it('writes the boolean on the matching application', () => {
+describe('setStatus', () => {
+  it('moves the matching application through the pipeline', () => {
     const storage = createMemoryStorage();
     const [first] = addApplication(storage, {
       company: 'Acme',
       title: 'Dev',
       dateApplied: '2026-08-20',
-      receivedOffer: false
+      status: 'applied'
     });
-    setOffer(storage, first.id, true);
-    expect(getApplications(storage)[0].receivedOffer).toBe(true);
-    setOffer(storage, first.id, false);
-    expect(getApplications(storage)[0].receivedOffer).toBe(false);
+    setStatus(storage, first.id, 'interviewing');
+    expect(getApplications(storage)[0].status).toBe('interviewing');
+    setStatus(storage, first.id, 'rejected');
+    expect(getApplications(storage)[0].status).toBe('rejected');
+    setStatus(storage, first.id, 'Offer');
+    expect(getApplications(storage)[0].status).toBe('offer');
+    setStatus(storage, first.id, 'applied');
+    expect(getApplications(storage)[0].status).toBe('applied');
   });
 
   it('does not touch other applications', () => {
@@ -82,26 +86,33 @@ describe('setOffer', () => {
       company: 'Acme',
       title: 'Dev',
       dateApplied: '2026-08-20',
-      receivedOffer: false
+      status: 'applied'
     });
     addApplication(storage, {
       company: 'Globex',
       title: 'PM',
       dateApplied: '2026-08-25',
-      receivedOffer: false
+      status: 'applied'
     });
     const secondId = getApplications(storage)[1].id;
-    setOffer(storage, secondId, true);
+    setStatus(storage, secondId, 'rejected');
     const apps = getApplications(storage);
-    expect(apps.find((a) => a.id === first.id)?.receivedOffer).toBe(false);
-    expect(apps.find((a) => a.id === secondId)?.receivedOffer).toBe(true);
+    expect(apps.find((a) => a.id === first.id)?.status).toBe('applied');
+    expect(apps.find((a) => a.id === secondId)?.status).toBe('rejected');
   });
 
   it('rejects a missing id', () => {
     const storage = createMemoryStorage();
     addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-08-20' });
-    expect(() => setOffer(storage, 'missing-id', true)).toThrow(/not found/i);
-    expect(() => setOffer(storage, '', true)).toThrow(/invalid application id/i);
+    expect(() => setStatus(storage, 'missing-id', 'rejected')).toThrow(/not found/i);
+    expect(() => setStatus(storage, '', 'rejected')).toThrow(/invalid application id/i);
+  });
+
+  it('rejects an unknown status without writing', () => {
+    const storage = createMemoryStorage();
+    const [first] = addApplication(storage, { company: 'Acme', title: 'Dev', dateApplied: '2026-08-20' });
+    expect(() => setStatus(storage, first.id, 'ghosted')).toThrow(/status must be one of/i);
+    expect(getApplications(storage)[0].status).toBe('applied');
   });
 });
 
@@ -112,13 +123,13 @@ describe('updateApplication', () => {
       company: 'Acme',
       title: 'Dev',
       dateApplied: '2026-08-20',
-      receivedOffer: false
+      status: 'applied'
     });
     const next = updateApplication(storage, first.id, {
       company: 'Acme Inc',
       title: 'Senior Dev',
       dateApplied: '2026-08-21',
-      receivedOffer: true,
+      status: 'offer',
       postingUrl: 'https://jobs.acme.test/senior'
     });
     expect(next).toHaveLength(1);
@@ -127,7 +138,7 @@ describe('updateApplication', () => {
       company: 'Acme Inc',
       title: 'Senior Dev',
       dateApplied: '2026-08-21',
-      receivedOffer: true,
+      status: 'offer',
       postingUrl: 'https://jobs.acme.test/senior'
     });
   });
@@ -220,7 +231,18 @@ describe('removeApplication', () => {
   });
 });
 
-describe('legacy records without postingUrl', () => {
+describe('legacy records', () => {
+  it('upgrades a receivedOffer boolean to a status', () => {
+    const storage = createMemoryStorage({
+      'job-tracker.applications': JSON.stringify([
+        { id: 'a', company: 'Acme', title: 'Dev', dateApplied: '2026-08-20', receivedOffer: true },
+        { id: 'b', company: 'Globex', title: 'PM', dateApplied: '2026-08-21', receivedOffer: false },
+        { id: 'c', company: 'Initech', title: 'QA', dateApplied: '2026-08-22', status: 'rejected' }
+      ])
+    });
+    expect(getApplications(storage).map((a) => a.status)).toEqual(['offer', 'applied', 'rejected']);
+  });
+
   it('loads four-field JSON and defaults postingUrl to empty', () => {
     const storage = createMemoryStorage({
       'job-tracker.applications': JSON.stringify([
@@ -229,7 +251,7 @@ describe('legacy records without postingUrl', () => {
           company: 'Acme',
           title: 'Dev',
           dateApplied: '2026-08-20',
-          receivedOffer: false
+          status: 'applied'
         }
       ])
     });
@@ -239,7 +261,7 @@ describe('legacy records without postingUrl', () => {
         company: 'Acme',
         title: 'Dev',
         dateApplied: '2026-08-20',
-        receivedOffer: false,
+        status: 'applied',
         postingUrl: ''
       }
     ]);
